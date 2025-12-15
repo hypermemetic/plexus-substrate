@@ -22,7 +22,7 @@ pub struct TryRequest {
     pub jsonrpc: String,
     pub id: u64,
     pub method: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<Value>,
 }
 

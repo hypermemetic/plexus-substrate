@@ -13,12 +13,73 @@ use jsonrpsee::{
 use serde_json::{json, Value};
 use std::time::Duration;
 
-const SERVER_URL: &str = "ws://127.0.0.1:4444";
+/// Test that unknown activations return guided errors with `try` field
+#[tokio::test]
+async fn test_guided_error_unknown_activation() {
+    let client = create_client().await.expect("Failed to connect to server - is it running?");
+
+    // Try to call an unknown activation - this should fail with a guided error
+    let result = client
+        .subscribe::<Value, _>("unknown_method", rpc_params![], "unsubscribe_unknown")
+        .await;
+
+    // The subscription should fail with an error
+    let err = result.expect_err("Should have failed for unknown activation");
+    let err_str = format!("{:?}", err);
+
+    eprintln!("Error for unknown_method: {}", err_str);
+
+    // The error should mention the method not found
+    assert!(
+        err_str.contains("unknown") || err_str.contains("not found") || err_str.contains("Method"),
+        "Error should indicate method/activation not found: {}", err_str
+    );
+}
+
+/// Test that unknown activation errors include the `try` field with guidance
+#[tokio::test]
+async fn test_guided_error_includes_try_field() {
+    let client = create_client().await.expect("Failed to connect to server - is it running?");
+
+    // Try foo_bar - 'foo' is not a valid activation
+    let result = client
+        .subscribe::<Value, _>("foo_bar", rpc_params![], "unsubscribe_foo")
+        .await;
+
+    let err = result.expect_err("Should have failed for unknown activation 'foo'");
+    let err_str = format!("{:?}", err);
+
+    eprintln!("Error for foo_bar: {}", err_str);
+
+    // Check that the error includes our guided error data
+    // The middleware should have enriched it with available_activations and try field
+    assert!(
+        err_str.contains("Activation 'foo' not found"),
+        "Error message should say activation not found: {}", err_str
+    );
+    assert!(
+        err_str.contains("plexus_schema"),
+        "Error should include 'try' field with plexus_schema: {}", err_str
+    );
+    assert!(
+        err_str.contains("available_activations"),
+        "Error should include available_activations: {}", err_str
+    );
+    assert!(
+        err_str.contains("arbor") && err_str.contains("bash") && err_str.contains("health"),
+        "Error should list available activations: {}", err_str
+    );
+}
+
+fn server_url() -> String {
+    let port = std::env::var("SUBSTRATE_PORT").unwrap_or_else(|_| "4444".to_string());
+    format!("ws://127.0.0.1:{}", port)
+}
 
 async fn create_client() -> Result<jsonrpsee::ws_client::WsClient, Box<dyn std::error::Error>> {
     let client = WsClientBuilder::default()
         .connection_timeout(Duration::from_secs(5))
-        .build(SERVER_URL)
+        .build(&server_url())
         .await?;
     Ok(client)
 }
