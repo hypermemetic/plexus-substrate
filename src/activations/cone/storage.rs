@@ -1,8 +1,9 @@
 use super::types::{ConeConfig, ConeError, ConeId, ConeInfo, Message, MessageId, MessageRole, Position};
-use crate::activations::arbor::{Handle, ArborConfig, ArborStorage, NodeId, TreeId};
+use crate::activations::arbor::{Handle, ArborStorage, NodeId, TreeId};
 use serde_json::Value;
 use sqlx::{sqlite::SqlitePool, Row};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -11,15 +12,12 @@ use uuid::Uuid;
 pub struct ConeStorageConfig {
     /// Path to SQLite database for cone configs
     pub db_path: PathBuf,
-    /// Arbor configuration (cones use arbor for context trees)
-    pub arbor_config: ArborConfig,
 }
 
 impl Default for ConeStorageConfig {
     fn default() -> Self {
         Self {
             db_path: PathBuf::from("cones.db"),
-            arbor_config: ArborConfig::default(),
         }
     }
 }
@@ -27,22 +25,17 @@ impl Default for ConeStorageConfig {
 /// Storage layer for cone configurations
 pub struct ConeStorage {
     pool: SqlitePool,
-    arbor: ArborStorage,
+    arbor: Arc<ArborStorage>,
 }
 
 impl ConeStorage {
-    /// Create a new cone storage instance
-    pub async fn new(config: ConeStorageConfig) -> Result<Self, ConeError> {
+    /// Create a new cone storage instance with a shared Arbor storage
+    pub async fn new(config: ConeStorageConfig, arbor: Arc<ArborStorage>) -> Result<Self, ConeError> {
         // Initialize cone database
         let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
         let pool = SqlitePool::connect(&db_url)
             .await
             .map_err(|e| format!("Failed to connect to cone database: {}", e))?;
-
-        // Initialize arbor storage (cones own their arbor instance)
-        let arbor = ArborStorage::new(config.arbor_config)
-            .await
-            .map_err(|e| format!("Failed to initialize arbor: {}", e))?;
 
         let storage = Self { pool, arbor };
         storage.run_migrations().await?;

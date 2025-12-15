@@ -231,6 +231,57 @@ impl Plexus {
             },
         )?;
 
+        // plexus_activation_schema subscription - returns enriched schema for a specific activation
+        // Clone activations for the closure
+        let activations_for_schema: HashMap<String, Arc<dyn Activation>> = self
+            .activations
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
+            .collect();
+
+        module.register_subscription(
+            "plexus_activation_schema",
+            "plexus_activation_schema",
+            "plexus_unsubscribe_activation_schema",
+            move |params, pending, _ctx| {
+                let activations = activations_for_schema.clone();
+                async move {
+                    // Parse namespace parameter
+                    let namespace: String = params.one()?;
+                    let sink = pending.accept().await?;
+
+                    if let Some(activation) = activations.get(&namespace) {
+                        let schema = activation.enrich_schema();
+                        let response = PlexusStreamItem::Data {
+                            provenance: Provenance::root("plexus"),
+                            content_type: "plexus.activation_schema".to_string(),
+                            data: serde_json::to_value(&schema).unwrap(),
+                        };
+                        if let Ok(msg) = SubscriptionMessage::from_json(&response) {
+                            let _ = sink.send(msg).await;
+                        }
+                    } else {
+                        let error = PlexusStreamItem::Error {
+                            provenance: Provenance::root("plexus"),
+                            error: format!("Activation not found: {}", namespace),
+                            recoverable: false,
+                        };
+                        if let Ok(msg) = SubscriptionMessage::from_json(&error) {
+                            let _ = sink.send(msg).await;
+                        }
+                    }
+
+                    let done = PlexusStreamItem::Done {
+                        provenance: Provenance::root("plexus"),
+                    };
+                    if let Ok(msg) = SubscriptionMessage::from_json(&done) {
+                        let _ = sink.send(msg).await;
+                    }
+                    Ok(())
+                }
+            },
+        )?;
+
         // Merge activation methods
         for factory in self.pending_rpc {
             module.merge(factory())?;

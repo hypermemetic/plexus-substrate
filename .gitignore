@@ -34,3 +34,6 @@ cabal.project.local~
 *.sqlite
 *.sqlite3
 agents.db
+
+# Substrate data directory
+.substrate/

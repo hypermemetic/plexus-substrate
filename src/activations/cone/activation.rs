@@ -88,8 +88,8 @@ pub struct Cone {
 }
 
 impl Cone {
-    pub async fn new(config: ConeStorageConfig) -> Result<Self, String> {
-        let storage = ConeStorage::new(config)
+    pub async fn new(config: ConeStorageConfig, arbor: Arc<crate::activations::arbor::ArborStorage>) -> Result<Self, String> {
+        let storage = ConeStorage::new(config, arbor)
             .await
             .map_err(|e| format!("Failed to initialize cone storage: {}", e.message))?;
 

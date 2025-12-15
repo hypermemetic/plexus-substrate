@@ -11,7 +11,6 @@ use jsonrpsee::{core::server::Methods, proc_macros::rpc, PendingSubscriptionSink
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// RPC adapter trait - defines the JSON-RPC interface for Arbor
 #[rpc(server, namespace = "arbor")]
@@ -188,18 +187,29 @@ pub trait ArborRpc {
 /// Arbor plugin - manages conversation trees
 #[derive(Clone)]
 pub struct Arbor {
-    storage: Arc<Mutex<ArborStorage>>,
+    storage: Arc<ArborStorage>,
 }
 
 impl Arbor {
+    /// Create a new Arbor activation with its own storage
     pub async fn new(config: ArborConfig) -> Result<Self, String> {
         let storage = ArborStorage::new(config)
             .await
             .map_err(|e| format!("Failed to initialize Arbor storage: {}", e.message))?;
 
         Ok(Self {
-            storage: Arc::new(Mutex::new(storage)),
+            storage: Arc::new(storage),
         })
+    }
+
+    /// Create an Arbor activation with a shared storage instance
+    pub fn with_storage(storage: Arc<ArborStorage>) -> Self {
+        Self { storage }
+    }
+
+    /// Get the underlying storage (for sharing with other activations)
+    pub fn storage(&self) -> Arc<ArborStorage> {
+        self.storage.clone()
     }
 
     // ========================================================================
@@ -213,7 +223,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_create(metadata, &owner_id).await {
                 Ok(tree_id) => ArborEvent::TreeCreated { tree_id },
                 Err(e) => {
@@ -234,7 +244,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_get(&tree_id).await {
                 Ok(tree) => ArborEvent::TreeData { tree },
                 Err(e) => {
@@ -253,7 +263,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_get(&tree_id).await {
                 Ok(tree) => ArborEvent::TreeSkeleton {
                     skeleton: TreeSkeleton::from(&tree),
@@ -269,7 +279,7 @@ impl Arbor {
     async fn tree_list_stream(&self) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_list(false).await {
                 Ok(tree_ids) => ArborEvent::TreeList { tree_ids },
                 Err(e) => {
@@ -287,7 +297,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_update_metadata(&tree_id, metadata).await {
                 Ok(_) => ArborEvent::TreeUpdated { tree_id },
                 Err(e) => {
@@ -306,7 +316,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_claim(&tree_id, &owner_id, count).await {
                 Ok(new_count) => ArborEvent::TreeClaimed {
                     tree_id,
@@ -329,7 +339,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_release(&tree_id, &owner_id, count).await {
                 Ok(new_count) => ArborEvent::TreeReleased {
                     tree_id,
@@ -347,7 +357,7 @@ impl Arbor {
     async fn tree_list_scheduled_stream(&self) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_list(true).await {
                 Ok(tree_ids) => ArborEvent::TreesScheduled { tree_ids },
                 Err(e) => {
@@ -361,7 +371,7 @@ impl Arbor {
     async fn tree_list_archived_stream(&self) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             // Use tree_list with include_scheduled=true to get archived trees
             // TODO: Add dedicated tree_list_archived method to storage if needed
             match storage.tree_list(true).await {
@@ -383,7 +393,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.node_create_text(&tree_id, parent, content, metadata).await {
                 Ok(node_id) => ArborEvent::NodeCreated {
                     tree_id,
@@ -407,7 +417,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.node_create_external(&tree_id, parent, handle, metadata).await {
                 Ok(node_id) => ArborEvent::NodeCreated {
                     tree_id,
@@ -429,7 +439,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.node_get(&tree_id, &node_id).await {
                 Ok(node) => ArborEvent::NodeData { tree_id, node },
                 Err(e) => {
@@ -447,7 +457,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.node_get_children(&tree_id, &node_id).await {
                 Ok(children) => ArborEvent::NodeChildren {
                     tree_id,
@@ -469,7 +479,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.node_get_parent(&tree_id, &node_id).await {
                 Ok(parent) => ArborEvent::NodeParent {
                     tree_id,
@@ -491,7 +501,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.node_get_path(&tree_id, &node_id).await {
                 Ok(path) => ArborEvent::ContextPath { tree_id, path },
                 Err(e) => {
@@ -508,7 +518,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.context_list_leaves(&tree_id).await {
                 Ok(leaves) => ArborEvent::ContextLeaves { tree_id, leaves },
                 Err(e) => {
@@ -526,7 +536,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.context_get_path(&tree_id, &node_id).await {
                 Ok(nodes) => ArborEvent::ContextPathData { tree_id, nodes },
                 Err(e) => {
@@ -544,7 +554,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.context_get_handles(&tree_id, &node_id).await {
                 Ok(handles) => ArborEvent::ContextHandles { tree_id, handles },
                 Err(e) => {
@@ -561,7 +571,7 @@ impl Arbor {
     ) -> Pin<Box<dyn Stream<Item = ArborEvent> + Send + 'static>> {
         let storage = self.storage.clone();
         Box::pin(stream::once(async move {
-            let storage = storage.lock().await;
+            let storage = storage.as_ref();
             match storage.tree_get(&tree_id).await {
                 Ok(tree) => ArborEvent::TreeRender {
                     tree_id,
