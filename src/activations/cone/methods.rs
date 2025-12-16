@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Identifier for a cone - either by name or UUID
+///
+/// Provide EITHER name OR id (not both):
+/// - `{"name": "assistant"}` - lookup by name (supports partial matching)
+/// - `{"id": "550e8400-e29b-41d4-a716-446655440000"}` - lookup by UUID
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(untagged)]
 #[serde(untagged)]
 pub enum ConeIdentifier {
     /// Lookup cone by its human-readable name
