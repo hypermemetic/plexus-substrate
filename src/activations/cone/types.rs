@@ -220,12 +220,13 @@ impl ActivationStreamItem for ConeEvent {
         "cone.event"
     }
 
-    fn into_plexus_item(self, provenance: Provenance) -> PlexusStreamItem {
-        PlexusStreamItem::Data {
+    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
+        PlexusStreamItem::data(
+            plexus_hash.to_string(),
             provenance,
-            content_type: Self::content_type().to_string(),
-            data: serde_json::to_value(self).unwrap(),
-        }
+            Self::content_type().to_string(),
+            serde_json::to_value(self).unwrap(),
+        )
     }
 }
 

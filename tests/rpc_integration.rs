@@ -29,9 +29,16 @@ async fn test_schema_includes_required_in_params() {
         .expect("Stream ended")
         .expect("Error receiving event");
 
+    // Check that plexus_hash is present in the response
+    let plexus_hash = event.get("plexus_hash")
+        .expect("Response should include plexus_hash at top level");
+    assert!(plexus_hash.is_string(), "plexus_hash should be a string");
+    let hash_str = plexus_hash.as_str().unwrap();
+    assert!(!hash_str.is_empty(), "plexus_hash should not be empty");
+    eprintln!("✓ Found plexus_hash in response: {}", hash_str);
+
     // Navigate to the schema data
-    let data = event.get("data").expect("Should have data field");
-    let schema = data.get("data").expect("Should have inner data");
+    let schema = event.get("data").expect("Should have data field");
     let one_of = schema.get("oneOf").expect("Schema should have oneOf");
 
     // Find node_create_text variant
@@ -48,11 +55,6 @@ async fn test_schema_includes_required_in_params() {
         .get("properties")
         .and_then(|p| p.get("params"))
         .expect("Should have params property");
-
-    // Debug: print the full params object
-    eprintln!("\n=== Full params object for node_create_text ===");
-    eprintln!("{}", serde_json::to_string_pretty(params).unwrap());
-    eprintln!("=== End params ===\n");
 
     let required = params.get("required")
         .expect("params should have 'required' field - this is the fix we're testing!");
@@ -72,6 +74,53 @@ async fn test_schema_includes_required_in_params() {
         "parent should NOT be required");
 
     eprintln!("✓ Schema correctly includes required fields in params: {:?}", required_names);
+}
+
+/// Test that all responses include plexus_hash
+#[tokio::test]
+async fn test_responses_include_plexus_hash() {
+    let client = create_client().await.expect("Failed to connect to server - is it running?");
+
+    // Test health_check
+    let mut subscription = client
+        .subscribe::<Value, _>("health_check", rpc_params![], "unsubscribe_check")
+        .await
+        .expect("Failed to subscribe to health_check");
+
+    let event = tokio::time::timeout(Duration::from_secs(2), subscription.next())
+        .await
+        .expect("Timeout")
+        .expect("Stream ended")
+        .expect("Error receiving event");
+
+    let plexus_hash = event.get("plexus_hash")
+        .expect("health_check response should include plexus_hash");
+    assert!(plexus_hash.is_string() && !plexus_hash.as_str().unwrap().is_empty(),
+        "plexus_hash should be a non-empty string");
+
+    eprintln!("✓ health_check includes plexus_hash: {}", plexus_hash);
+
+    // Test plexus_hash endpoint directly
+    let mut subscription = client
+        .subscribe::<Value, _>("plexus_hash", rpc_params![], "unsubscribe_hash")
+        .await
+        .expect("Failed to subscribe to plexus_hash");
+
+    let event = tokio::time::timeout(Duration::from_secs(2), subscription.next())
+        .await
+        .expect("Timeout")
+        .expect("Stream ended")
+        .expect("Error receiving event");
+
+    let plexus_hash_top = event.get("plexus_hash").expect("Should have plexus_hash");
+    let data = event.get("data").expect("Should have data");
+    let hash_in_data = data.get("hash").expect("data should contain hash");
+
+    // The hash in the response should match the hash in data
+    assert_eq!(plexus_hash_top, hash_in_data,
+        "plexus_hash at top level should match hash in data");
+
+    eprintln!("✓ plexus_hash endpoint returns consistent hash: {}", plexus_hash_top);
 }
 
 /// Test that unknown activations return guided errors with `try` field

@@ -12,7 +12,7 @@ pub trait ActivationStreamItem: Serialize + Send + 'static {
     }
 
     /// Convert to body's unified type
-    fn into_plexus_item(self, provenance: Provenance) -> PlexusStreamItem;
+    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem;
 
     /// Whether this event indicates the stream should end
     fn is_terminal(&self) -> bool {
@@ -33,11 +33,12 @@ impl<T> ActivationStreamItem for TrackedItem<T>
 where
     T: Serialize + Send + 'static,
 {
-    fn into_plexus_item(self, provenance: Provenance) -> PlexusStreamItem {
-        PlexusStreamItem::Data {
+    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
+        PlexusStreamItem::data(
+            plexus_hash.to_string(),
             provenance,
-            content_type: std::any::type_name::<T>().to_string(),
-            data: serde_json::to_value(self.item).unwrap(),
-        }
+            std::any::type_name::<T>().to_string(),
+            serde_json::to_value(self.item).unwrap(),
+        )
     }
 }

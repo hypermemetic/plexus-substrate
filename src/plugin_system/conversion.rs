@@ -1,5 +1,5 @@
 use super::types::ActivationStreamItem;
-use crate::plexus::{Provenance, PlexusStreamItem};
+use crate::plexus::{PlexusContext, Provenance, PlexusStreamItem};
 use futures::{Stream, StreamExt};
 use jsonrpsee::{PendingSubscriptionSink, SubscriptionMessage};
 
@@ -10,6 +10,8 @@ pub trait IntoSubscription: Send + 'static {
     type Item: ActivationStreamItem;
 
     /// Convert this stream into a jsonrpsee subscription
+    ///
+    /// The plexus hash is automatically retrieved from the global PlexusContext.
     async fn into_subscription(
         self,
         pending: PendingSubscriptionSink,
@@ -31,11 +33,12 @@ where
         provenance: Provenance,
     ) -> SubscriptionResult {
         let sink = pending.accept().await?;
+        let plexus_hash = PlexusContext::hash();
 
         tokio::spawn(async move {
             let mut stream = Box::pin(self);
             while let Some(item) = stream.next().await {
-                let body_item = item.into_plexus_item(provenance.clone());
+                let body_item = item.into_plexus_item(provenance.clone(), &plexus_hash);
 
                 // Convert to SubscriptionMessage and send
                 let msg = match SubscriptionMessage::from_json(&body_item) {
@@ -49,7 +52,7 @@ where
             }
 
             // Send Done event when stream completes
-            let done = PlexusStreamItem::Done { provenance: provenance.clone() };
+            let done = PlexusStreamItem::done(plexus_hash, provenance);
             if let Ok(msg) = SubscriptionMessage::from_json(&done) {
                 let _ = sink.send(msg).await;
             }

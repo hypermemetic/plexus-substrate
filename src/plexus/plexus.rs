@@ -1,4 +1,4 @@
-use super::{path::Provenance, schema::Schema, types::PlexusStreamItem};
+use super::{context::PlexusContext, path::Provenance, schema::Schema, types::PlexusStreamItem};
 use crate::plugin_system::types::ActivationStreamItem;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -238,30 +238,30 @@ impl Plexus {
             total_methods: self.list_methods().len(),
         };
 
-        // Compute hash for cache invalidation
+        // Compute hash for cache invalidation and initialize global context
         let plexus_hash = self.compute_hash();
+        PlexusContext::init(plexus_hash.clone());
 
         // plexus_hash subscription - returns hash for cache invalidation
-        let hash_for_closure = plexus_hash.clone();
+        let hash_for_hash_sub = plexus_hash.clone();
         module.register_subscription(
             "plexus_hash",
             "plexus_hash",
             "plexus_unsubscribe_hash",
             move |_params, pending, _ctx| {
-                let hash = hash_for_closure.clone();
+                let hash = hash_for_hash_sub.clone();
                 async move {
                     let sink = pending.accept().await?;
-                    let response = PlexusStreamItem::Data {
-                        provenance: Provenance::root("plexus"),
-                        content_type: "plexus.hash".to_string(),
-                        data: serde_json::json!({ "hash": hash }),
-                    };
+                    let response = PlexusStreamItem::data(
+                        hash.clone(),
+                        Provenance::root("plexus"),
+                        "plexus.hash".to_string(),
+                        serde_json::json!({ "hash": hash }),
+                    );
                     if let Ok(msg) = SubscriptionMessage::from_json(&response) {
                         let _ = sink.send(msg).await;
                     }
-                    let done = PlexusStreamItem::Done {
-                        provenance: Provenance::root("plexus"),
-                    };
+                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
                     if let Ok(msg) = SubscriptionMessage::from_json(&done) {
                         let _ = sink.send(msg).await;
                     }
@@ -271,25 +271,26 @@ impl Plexus {
         )?;
 
         // plexus_schema subscription - returns all activations and methods
+        let hash_for_schema = plexus_hash.clone();
         module.register_subscription(
             "plexus_schema",
             "plexus_schema",
             "plexus_unsubscribe_schema",
             move |_params, pending, _ctx| {
                 let schema = plexus_schema.clone();
+                let hash = hash_for_schema.clone();
                 async move {
                     let sink = pending.accept().await?;
-                    let response = PlexusStreamItem::Data {
-                        provenance: Provenance::root("plexus"),
-                        content_type: "plexus.schema".to_string(),
-                        data: serde_json::to_value(&schema).unwrap(),
-                    };
+                    let response = PlexusStreamItem::data(
+                        hash.clone(),
+                        Provenance::root("plexus"),
+                        "plexus.schema".to_string(),
+                        serde_json::to_value(&schema).unwrap(),
+                    );
                     if let Ok(msg) = SubscriptionMessage::from_json(&response) {
                         let _ = sink.send(msg).await;
                     }
-                    let done = PlexusStreamItem::Done {
-                        provenance: Provenance::root("plexus"),
-                    };
+                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
                     if let Ok(msg) = SubscriptionMessage::from_json(&done) {
                         let _ = sink.send(msg).await;
                     }
@@ -305,6 +306,7 @@ impl Plexus {
             .iter()
             .map(|(k, v)| (k.clone(), Arc::clone(v)))
             .collect();
+        let hash_for_activation_schema = plexus_hash.clone();
 
         module.register_subscription(
             "plexus_activation_schema",
@@ -312,6 +314,7 @@ impl Plexus {
             "plexus_unsubscribe_activation_schema",
             move |params, pending, _ctx| {
                 let activations = activations_for_schema.clone();
+                let hash = hash_for_activation_schema.clone();
                 async move {
                     // Parse namespace parameter
                     let namespace: String = params.one()?;
@@ -319,28 +322,28 @@ impl Plexus {
 
                     if let Some(activation) = activations.get(&namespace) {
                         let schema = activation.enrich_schema();
-                        let response = PlexusStreamItem::Data {
-                            provenance: Provenance::root("plexus"),
-                            content_type: "plexus.activation_schema".to_string(),
-                            data: serde_json::to_value(&schema).unwrap(),
-                        };
+                        let response = PlexusStreamItem::data(
+                            hash.clone(),
+                            Provenance::root("plexus"),
+                            "plexus.activation_schema".to_string(),
+                            serde_json::to_value(&schema).unwrap(),
+                        );
                         if let Ok(msg) = SubscriptionMessage::from_json(&response) {
                             let _ = sink.send(msg).await;
                         }
                     } else {
-                        let error = PlexusStreamItem::Error {
-                            provenance: Provenance::root("plexus"),
-                            error: format!("Activation not found: {}", namespace),
-                            recoverable: false,
-                        };
+                        let error = PlexusStreamItem::error(
+                            hash.clone(),
+                            Provenance::root("plexus"),
+                            format!("Activation not found: {}", namespace),
+                            false,
+                        );
                         if let Ok(msg) = SubscriptionMessage::from_json(&error) {
                             let _ = sink.send(msg).await;
                         }
                     }
 
-                    let done = PlexusStreamItem::Done {
-                        provenance: Provenance::root("plexus"),
-                    };
+                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
                     if let Ok(msg) = SubscriptionMessage::from_json(&done) {
                         let _ = sink.send(msg).await;
                     }
@@ -381,5 +384,6 @@ where
     S: Stream<Item = T> + Send + 'static,
     T: ActivationStreamItem,
 {
-    Box::pin(stream.map(move |item| item.into_plexus_item(provenance.clone())))
+    let plexus_hash = PlexusContext::hash();
+    Box::pin(stream.map(move |item| item.into_plexus_item(provenance.clone(), &plexus_hash)))
 }

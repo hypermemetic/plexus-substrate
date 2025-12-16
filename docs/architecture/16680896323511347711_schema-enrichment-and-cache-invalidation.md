@@ -2,10 +2,10 @@
 
 ## Overview
 
-This document describes two related improvements to the plexus RPC system:
+This document describes improvements to the plexus RPC system:
 
 1. **Schema Required Params Fix** - The `required` field is now properly included in params objects
-2. **Cache Invalidation Hash** - A new `plexus_hash` method enables efficient schema cache invalidation
+2. **Cache Invalidation Hash** - Every response includes `plexus_hash` for efficient cache invalidation
 
 ## Schema Required Params (Fixed)
 
@@ -101,9 +101,28 @@ CLI frontends cache the schema for performance, but have no efficient way to kno
 2. **Time-based expiry** - May serve stale schema
 3. **Manual invalidation** - Error-prone
 
-### The Solution: plexus_hash
+### The Solution: plexus_hash in Every Response
 
-A new plexus-level RPC method that returns a deterministic hash of all activations:
+Every JSON-RPC response now includes `plexus_hash` at the top level:
+
+```json
+{
+  "plexus_hash": "7a1a43920ee194e1",
+  "type": "data",
+  "provenance": ["health"],
+  "content_type": "health.event",
+  "data": { "status": "healthy", ... }
+}
+```
+
+This means:
+- Clients can check the hash on ANY response, not just dedicated schema calls
+- No extra round-trip needed to detect schema changes
+- Cache invalidation happens naturally during normal operation
+
+### Dedicated plexus_hash Endpoint
+
+For explicit hash queries, there's also a dedicated endpoint:
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"plexus_hash","params":[]}
@@ -113,9 +132,10 @@ Response:
 
 ```json
 {
+  "plexus_hash": "7a1a43920ee194e1",
   "type": "data",
   "content_type": "plexus.hash",
-  "data": { "hash": "a1b2c3d4e5f67890" }
+  "data": { "hash": "7a1a43920ee194e1" }
 }
 ```
 
@@ -162,20 +182,26 @@ This is intentional - if an activation's external interface changes, the hash ch
 ### Frontend Usage Pattern
 
 ```haskell
--- Pseudocode
-cachedHash <- readCacheFile "plexus_hash"
-currentHash <- call "plexus_hash" []
+-- Every response includes plexus_hash, so check it during normal operation
+handleResponse :: Response -> IO ()
+handleResponse resp = do
+    cachedHash <- readCacheFile "plexus_hash"
+    let currentHash = plexusHash resp
 
-if cachedHash /= currentHash then do
-    -- Refresh all activation schemas
+    when (cachedHash /= currentHash) $ do
+        -- Hash changed! Refresh schemas in background
+        refreshSchemaCache currentHash
+
+    -- Process the actual response
+    processData (responseData resp)
+
+refreshSchemaCache :: Text -> IO ()
+refreshSchemaCache newHash = do
     schema <- call "plexus_schema" []
     forM_ (activations schema) $ \activation -> do
         enriched <- call "plexus_activation_schema" [namespace activation]
         writeCacheFile (namespace activation) enriched
-    writeCacheFile "plexus_hash" currentHash
-else
-    -- Use cached schemas
-    loadFromCache
+    writeCacheFile "plexus_hash" newHash
 ```
 
 ## Available Plexus Methods

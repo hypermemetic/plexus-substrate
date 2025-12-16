@@ -512,12 +512,13 @@ impl ActivationStreamItem for ArborEvent {
         "arbor.event"
     }
 
-    fn into_plexus_item(self, provenance: Provenance) -> PlexusStreamItem {
-        PlexusStreamItem::Data {
+    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
+        PlexusStreamItem::data(
+            plexus_hash.to_string(),
             provenance,
-            content_type: Self::content_type().to_string(),
-            data: serde_json::to_value(self).unwrap(),
-        }
+            Self::content_type().to_string(),
+            serde_json::to_value(self).unwrap(),
+        )
     }
 
     fn is_terminal(&self) -> bool {
@@ -537,12 +538,13 @@ pub struct ArborError {
 }
 
 impl ActivationStreamItem for ArborError {
-    fn into_plexus_item(self, provenance: Provenance) -> PlexusStreamItem {
-        PlexusStreamItem::Error {
+    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
+        PlexusStreamItem::error(
+            plexus_hash.to_string(),
             provenance,
-            error: self.message,
-            recoverable: false,
-        }
+            self.message,
+            false,
+        )
     }
 }
 
