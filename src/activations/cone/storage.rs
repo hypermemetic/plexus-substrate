@@ -50,7 +50,7 @@ impl ConeStorage {
             r#"
             CREATE TABLE IF NOT EXISTS cones (
                 id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
+                name TEXT NOT NULL UNIQUE,
                 model_id TEXT NOT NULL,
                 system_prompt TEXT,
                 tree_id TEXT NOT NULL,
@@ -94,6 +94,9 @@ impl ConeStorage {
     // ========================================================================
 
     /// Create a new cone with a new conversation tree
+    ///
+    /// If a cone with the given name already exists, automatically appends `#<uuid>`
+    /// to make it unique. For example, "assistant" becomes "assistant#550e8400..."
     pub async fn cone_create(
         &self,
         name: String,
@@ -115,7 +118,8 @@ impl ConeStorage {
 
         let metadata_json = metadata.as_ref().map(|m| serde_json::to_string(m).unwrap());
 
-        sqlx::query(
+        // Try inserting with the original name first
+        let final_name = match sqlx::query(
             "INSERT INTO cones (id, name, model_id, system_prompt, tree_id, canonical_head, metadata, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
@@ -125,16 +129,41 @@ impl ConeStorage {
         .bind(&system_prompt)
         .bind(head.tree_id.to_string())
         .bind(head.node_id.to_string())
-        .bind(metadata_json)
+        .bind(metadata_json.clone())
         .bind(now)
         .bind(now)
         .execute(&self.pool)
-        .await
-        .map_err(|e| format!("Failed to create cone: {}", e))?;
+        .await {
+            Ok(_) => name,  // Success with original name
+            Err(e) if e.to_string().contains("UNIQUE constraint failed") => {
+                // Name collision - append #uuid to make it unique
+                let unique_name = format!("{}#{}", name, cone_id);
+
+                sqlx::query(
+                    "INSERT INTO cones (id, name, model_id, system_prompt, tree_id, canonical_head, metadata, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(cone_id.to_string())
+                .bind(&unique_name)
+                .bind(&model_id)
+                .bind(&system_prompt)
+                .bind(head.tree_id.to_string())
+                .bind(head.node_id.to_string())
+                .bind(metadata_json)
+                .bind(now)
+                .bind(now)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to create cone with unique name: {}", e))?;
+
+                unique_name
+            }
+            Err(e) => return Err(ConeError::from(format!("Failed to create cone: {}", e))),
+        };
 
         Ok(ConeConfig {
             id: cone_id,
-            name,
+            name: final_name,
             model_id,
             system_prompt,
             head,
@@ -145,19 +174,54 @@ impl ConeStorage {
     }
 
     /// Resolve a cone identifier to a ConeId
+    ///
+    /// For name lookups, supports partial matching on the name portion before '#':
+    /// - "assistant" matches "assistant" or "assistant#550e8400-..."
+    /// - "assistant#550e" matches "assistant#550e8400-..."
+    ///
+    /// Fails if the pattern matches multiple cones (ambiguous).
     pub async fn resolve_cone_identifier(&self, identifier: &ConeIdentifier) -> Result<ConeId, ConeError> {
         match identifier {
             ConeIdentifier::ById { id } => Ok(*id),
             ConeIdentifier::ByName { name } => {
-                let row = sqlx::query("SELECT id FROM cones WHERE name = ?")
+                // Try exact match first
+                if let Some(row) = sqlx::query("SELECT id FROM cones WHERE name = ?")
                     .bind(name)
                     .fetch_optional(&self.pool)
                     .await
                     .map_err(|e| ConeError::from(format!("Failed to resolve cone by name: {}", e)))?
-                    .ok_or_else(|| ConeError::from(format!("Cone not found with name: {}", name)))?;
+                {
+                    let id_str: String = row.get("id");
+                    return Uuid::parse_str(&id_str)
+                        .map_err(|e| ConeError::from(format!("Invalid cone ID in database: {}", e)));
+                }
 
-                let id_str: String = row.get("id");
-                Uuid::parse_str(&id_str).map_err(|e| ConeError::from(format!("Invalid cone ID in database: {}", e)))
+                // Try partial match with LIKE pattern
+                // Pattern: "name%" matches "name" or "name#uuid"
+                let pattern = format!("{}%", name);
+                let rows = sqlx::query("SELECT id, name FROM cones WHERE name LIKE ?")
+                    .bind(&pattern)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| ConeError::from(format!("Failed to resolve cone by pattern: {}", e)))?;
+
+                match rows.len() {
+                    0 => Err(ConeError::from(format!("Cone not found with name: {}", name))),
+                    1 => {
+                        let id_str: String = rows[0].get("id");
+                        Uuid::parse_str(&id_str)
+                            .map_err(|e| ConeError::from(format!("Invalid cone ID in database: {}", e)))
+                    }
+                    _ => {
+                        // Multiple matches - list them for user
+                        let matches: Vec<String> = rows.iter().map(|r| r.get("name")).collect();
+                        Err(ConeError::from(format!(
+                            "Ambiguous name '{}' matches multiple cones: {}. Use full name with #uuid to disambiguate.",
+                            name,
+                            matches.join(", ")
+                        )))
+                    }
+                }
             }
         }
     }
