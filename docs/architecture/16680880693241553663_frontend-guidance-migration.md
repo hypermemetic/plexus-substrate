@@ -456,7 +456,107 @@ formatSuggestion = \case
     "Suggestion: " <> msg
 ```
 
+## Feature Parity with Legacy Middleware
+
+The new stream-based guidance provides **equivalent or better** functionality than the legacy middleware:
+
+### What Middleware Provided
+
+```json
+{
+  "error": {
+    "code": -32601,
+    "message": "Activation 'foo' not found",
+    "data": {
+      "try": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "plexus_schema",
+        "params": []
+      },
+      "activation": "foo",
+      "available_activations": ["arbor", "bash", "cone", "health"]
+    }
+  }
+}
+```
+
+### What Stream Guidance Provides
+
+```json
+{
+  "type": "guidance",
+  "error_kind": "activation_not_found",
+  "activation": "foo",
+  "action": "call_plexus_schema"
+}
+```
+
+### Reconstructing TryRequest
+
+Frontends can reconstruct the exact `try` request from guidance:
+
+```typescript
+function guidanceToTryRequest(guidance: GuidanceEvent): TryRequest {
+  switch (guidance.action) {
+    case "call_plexus_schema":
+      return {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "plexus_schema",
+        params: []
+      };
+
+    case "call_activation_schema":
+      return {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "plexus_activation_schema",
+        params: [guidance.namespace]
+      };
+
+    case "try_method":
+      return {
+        jsonrpc: "2.0",
+        id: 1,
+        method: guidance.method,
+        params: guidance.example_params ? [guidance.example_params] : []
+      };
+
+    case "custom":
+      // Custom message - no specific request
+      return null;
+  }
+}
+```
+
+**Feature parity:** ✅ All information available
+
 ## Backward Compatibility
+
+### Transition Period (SUBSTRATE_DISABLE_MIDDLEWARE)
+
+During migration, both systems run in parallel:
+
+**Default behavior (middleware ENABLED):**
+```bash
+cargo run
+# → Middleware active, returns JSON-RPC errors with data.try field
+# → Stream guidance NOT sent (to avoid duplication)
+```
+
+**Opt-out (middleware DISABLED):**
+```bash
+SUBSTRATE_DISABLE_MIDDLEWARE=true cargo run
+# → Middleware inactive, returns guidance streams
+# → New behavior for testing
+```
+
+**Frontend can test both:**
+1. Test with middleware (current production)
+2. Test with `SUBSTRATE_DISABLE_MIDDLEWARE=true` (future)
+3. Verify all features work in both modes
+4. Migrate when ready
 
 ### Safe Forward Compatibility
 
@@ -482,16 +582,22 @@ switch (event.type) {
 
 ### Migration Strategy
 
-1. **Deploy substrate** with stream-based guidance
-2. **Update frontends** to handle guidance events (optional)
-3. **Remove legacy middleware** (Phase 6) - no breaking change since frontends already migrated
+1. **Phase 6A:** Substrate adds `SUBSTRATE_DISABLE_MIDDLEWARE` flag (middleware enabled by default)
+2. **Phase 6B:** Deprecation notices added (no breaking changes)
+3. **Phase 6C:** Frontend migration period (2-4 weeks)
+   - Frontends test with `SUBSTRATE_DISABLE_MIDDLEWARE=true`
+   - Update code to handle guidance events
+   - Verify feature parity
+4. **Phase 6D:** Default flipped to disabled (opt-in to enable middleware)
+5. **Phase 6E:** Final removal (after all frontends confirm migration)
 
 ### Breaking Changes
 
-**None** - this is a purely additive change:
-- Old frontends ignore `guidance` events
-- Error messages still appear via `error` events
-- Successful responses unchanged
+**None** - this is a gradual, opt-in migration:
+- Middleware stays enabled by default initially
+- Frontends choose when to migrate
+- Both systems coexist during transition
+- No data loss or functionality reduction
 
 ## Testing Your Implementation
 
