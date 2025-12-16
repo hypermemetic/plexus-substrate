@@ -90,6 +90,10 @@ pub struct SchemaProperty {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<HashMap<String, SchemaProperty>>,
 
+    /// Required properties (for object types)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<Vec<String>>,
+
     /// Default value for this property
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
@@ -170,6 +174,7 @@ impl SchemaProperty {
             format: None,
             items: None,
             properties: None,
+            required: None,
             default: None,
             enum_values: None,
             reference: None,
@@ -185,6 +190,7 @@ impl SchemaProperty {
             format: Some("uuid".to_string()),
             items: None,
             properties: None,
+            required: None,
             default: None,
             enum_values: None,
             reference: None,
@@ -200,6 +206,7 @@ impl SchemaProperty {
             format: None,
             items: None,
             properties: None,
+            required: None,
             default: None,
             enum_values: None,
             reference: None,
@@ -215,6 +222,7 @@ impl SchemaProperty {
             format: None,
             items: None,
             properties: Some(HashMap::new()),
+            required: None,
             default: None,
             enum_values: None,
             reference: None,
@@ -230,6 +238,7 @@ impl SchemaProperty {
             format: None,
             items: Some(Box::new(items)),
             properties: None,
+            required: None,
             default: None,
             enum_values: None,
             reference: None,

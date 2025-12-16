@@ -60,8 +60,17 @@ async fn build_plexus() -> Plexus {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing with filtering
+    // Show substrate and jsonrpsee, hide noisy lower-level crates entirely
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new(
+                "substrate=info,jsonrpsee=info,hyper=off,tokio=off,tower=off,sqlx=warn,h2=off,rustls=off"
+            )
+        });
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .init();
 
     // Build plexus with all activations
     let plexus = build_plexus().await;
