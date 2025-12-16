@@ -10,12 +10,18 @@ use uuid::Uuid;
 
 /// Identifier for a cone - either by name or UUID
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case", untagged)]
+#[serde(untagged)]
 pub enum ConeIdentifier {
     /// Lookup cone by its human-readable name
-    ByName { name: String },
+    ByName {
+        /// Cone name (supports partial matching, e.g., "assistant" or "assistant#550e")
+        name: String
+    },
     /// Lookup cone by its UUID
-    ById { id: Uuid },
+    ById {
+        /// Cone UUID
+        id: Uuid
+    },
 }
 
 /// All available methods in the Cone plugin
@@ -41,8 +47,7 @@ pub enum ConeMethod {
 
     /// Get cone configuration by name or ID
     Get {
-        /// Cone identifier (by name or UUID)
-        #[serde(flatten)]
+        /// Cone identifier (provide either name or id)
         identifier: ConeIdentifier,
     },
 
@@ -51,15 +56,13 @@ pub enum ConeMethod {
 
     /// Delete a cone (associated tree is preserved)
     Delete {
-        /// Cone identifier (by name or UUID)
-        #[serde(flatten)]
+        /// Cone identifier (provide either name or id)
         identifier: ConeIdentifier,
     },
 
     /// Chat with a cone - appends prompt to context, calls LLM, advances head
     Chat {
-        /// Cone identifier (by name or UUID)
-        #[serde(flatten)]
+        /// Cone identifier (provide either name or id)
         identifier: ConeIdentifier,
 
         /// User message / prompt
@@ -68,8 +71,7 @@ pub enum ConeMethod {
 
     /// Move cone's canonical head to a different node in the tree
     SetHead {
-        /// Cone identifier (by name or UUID)
-        #[serde(flatten)]
+        /// Cone identifier (provide either name or id)
         identifier: ConeIdentifier,
 
         /// UUID of the target node
