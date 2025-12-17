@@ -56,6 +56,9 @@ cllient = { path = "../cllient" }
 # Session types for method protocols
 dialectic = { version = "0.4.1", features = ["tokio"] }
 
+# Hub method macro
+hub-macro = { path = "../hub-macro" }
+
 [patch.crates-io]
 semantic-query = { path = "../semantic-query" }
 
