@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn test_generated_method_enum() {
-        let names = BashMethod::method_names();
+        let names = BashMethod::all_method_names();
         assert!(names.contains(&"execute"));
     }
 

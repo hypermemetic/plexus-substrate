@@ -700,6 +700,11 @@ mod tests {
         #[derive(serde::Serialize, schemars::JsonSchema)]
         enum TestMethod {}
 
+        impl MethodEnumSchema for TestMethod {
+            fn method_names() -> &'static [&'static str] { &[] }
+            fn schema_with_consts() -> Value { Value::Null }
+        }
+
         #[async_trait]
         impl Activation for TestActivation {
             type Methods = TestMethod;
@@ -755,6 +760,11 @@ mod tests {
 
         #[derive(serde::Serialize, schemars::JsonSchema)]
         enum MinimalMethod {}
+
+        impl MethodEnumSchema for MinimalMethod {
+            fn method_names() -> &'static [&'static str] { &[] }
+            fn schema_with_consts() -> Value { Value::Null }
+        }
 
         #[async_trait]
         impl Activation for MinimalActivation {
