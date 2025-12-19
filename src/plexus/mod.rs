@@ -15,7 +15,7 @@ pub use errors::{GuidedError, GuidedErrorData, TryRequest};
 #[deprecated(note = "Middleware removed - guidance provided via PlexusStreamEvent::Guidance")]
 pub use middleware::{ActivationRegistry, GuidedErrorMiddleware};
 pub use path::Provenance;
-pub use plexus::{Activation, ActivationInfo, into_plexus_stream, Plexus, PlexusError, PlexusStream};
+pub use plexus::{Activation, ActivationFullSchema, ActivationInfo, into_plexus_stream, MethodSchemaInfo, Plexus, PlexusError, PlexusStream};
 pub use schema::{Schema, SchemaProperty, SchemaType};
 pub use method::{ActivationMethodsSchema, Method, MethodCollection, MethodSchema};
 pub use session_schema::{ListSchema, ProtocolSchema, SessionSchema};

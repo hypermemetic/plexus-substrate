@@ -49,6 +49,26 @@ pub struct ActivationInfo {
     pub methods: Vec<String>,
 }
 
+/// Schema for a single method including params and return type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MethodSchemaInfo {
+    pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<schemars::Schema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returns: Option<schemars::Schema>,
+}
+
+/// Full schema for an activation including all methods with their input/output types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivationFullSchema {
+    pub namespace: String,
+    pub version: String,
+    pub description: String,
+    pub methods: Vec<MethodSchemaInfo>,
+}
+
 /// Plexus schema response - all activations and their methods
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlexusSchema {
@@ -135,6 +155,26 @@ pub trait Activation: Send + Sync + Clone + 'static {
 
     /// Convert this activation into RPC methods for JSON-RPC server
     fn into_rpc_methods(self) -> Methods;
+
+    /// Get full schema including method params and return types
+    ///
+    /// Default implementation returns basic info without param/return schemas.
+    /// Macro-generated activations override this with full type information.
+    fn full_schema(&self) -> ActivationFullSchema {
+        ActivationFullSchema {
+            namespace: self.namespace().to_string(),
+            version: self.version().to_string(),
+            description: self.description().to_string(),
+            methods: self.methods().iter().map(|name| {
+                MethodSchemaInfo {
+                    name: name.to_string(),
+                    description: self.method_help(name).unwrap_or_default(),
+                    params: None,
+                    returns: None,
+                }
+            }).collect(),
+        }
+    }
 }
 
 /// Internal wrapper that type-erases Activation into a trait object
@@ -178,6 +218,10 @@ impl<A: Activation> ActivationObject for ActivationWrapper<A> {
     fn into_rpc_methods(self) -> Methods {
         self.inner.into_rpc_methods()
     }
+
+    fn full_schema(&self) -> ActivationFullSchema {
+        self.inner.full_schema()
+    }
 }
 
 /// Implement CustomGuidance by delegating to inner Activation
@@ -213,6 +257,7 @@ trait ActivationObject: Send + Sync + ActivationGuidanceInfo + 'static {
     fn method_help(&self, method: &str) -> Option<String>;
     async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError>;
     fn into_rpc_methods(self) -> Methods;
+    fn full_schema(&self) -> ActivationFullSchema;
 }
 
 /// The Plexus - routes calls to registered activations
@@ -260,7 +305,7 @@ impl Plexus {
 
     /// List plexus-level methods (not activation methods)
     pub fn list_plexus_methods(&self) -> Vec<&'static str> {
-        vec!["plexus_schema", "plexus_activation_schema", "plexus_hash"]
+        vec!["plexus_schema", "plexus_activation_schema", "plexus_full_schema", "plexus_hash"]
     }
 
     /// Compute a hash of all activations and their methods for cache invalidation
@@ -526,6 +571,58 @@ impl Plexus {
                             Provenance::root("plexus"),
                             content_type,
                             schema_value,
+                        );
+                        if let Ok(msg) = SubscriptionMessage::from_json(&response) {
+                            let _ = sink.send(msg).await;
+                        }
+                    } else {
+                        let error = PlexusStreamItem::error(
+                            hash.clone(),
+                            Provenance::root("plexus"),
+                            format!("Activation not found: {}", namespace),
+                            false,
+                        );
+                        if let Ok(msg) = SubscriptionMessage::from_json(&error) {
+                            let _ = sink.send(msg).await;
+                        }
+                    }
+
+                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
+                    if let Ok(msg) = SubscriptionMessage::from_json(&done) {
+                        let _ = sink.send(msg).await;
+                    }
+                    Ok(())
+                }
+            },
+        )?;
+
+        // plexus_full_schema subscription - returns full schema with params and return types
+        let activations_for_full_schema: HashMap<String, Arc<dyn ActivationObject>> = self
+            .activations
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
+            .collect();
+        let hash_for_full_schema = plexus_hash.clone();
+
+        module.register_subscription(
+            "plexus_full_schema",
+            "plexus_full_schema",
+            "plexus_unsubscribe_full_schema",
+            move |params, pending, _ctx| {
+                let activations = activations_for_full_schema.clone();
+                let hash = hash_for_full_schema.clone();
+                async move {
+                    let mut seq = params.sequence();
+                    let namespace: String = seq.next()?;
+                    let sink = pending.accept().await?;
+
+                    if let Some(activation) = activations.get(&namespace) {
+                        let full_schema = activation.full_schema();
+                        let response = PlexusStreamItem::data(
+                            hash.clone(),
+                            Provenance::root("plexus"),
+                            "plexus.full_schema".to_string(),
+                            serde_json::to_value(&full_schema).unwrap(),
                         );
                         if let Ok(msg) = SubscriptionMessage::from_json(&response) {
                             let _ = sink.send(msg).await;
