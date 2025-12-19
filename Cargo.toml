@@ -40,12 +40,10 @@ regex = "1.10"
 dirs = "5.0"
 which = "6.0"
 # JSON-RPC server dependencies
-jsonrpc-core = "18.0"
-jsonrpc-stdio-server = "18.0"
-jsonrpsee = { version = "0.21", features = ["server", "macros"] }
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
 clap = { version = "4.0", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracing-log"] }
 dotenvy = "0.15"
 tower-http = { version = "0.5", features = ["trace", "util", "cors"] }
 http = "1.0"
@@ -64,5 +62,5 @@ hub-macro = { path = "../../../../hub-macro" }
 hyper = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.11", features = ["json"] }
-jsonrpsee = { version = "0.21", features = ["client", "ws-client"] }
+jsonrpsee = { version = "0.26", features = ["client", "ws-client"] }
 tokio-tungstenite = "0.21"

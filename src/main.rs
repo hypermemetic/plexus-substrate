@@ -9,9 +9,12 @@ use substrate::{
     },
 };
 use jsonrpsee::server::{Server, ServerHandle};
+use jsonrpsee::RpcModule;
+use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// Get the substrate data directory in the current working directory
 fn substrate_data_dir() -> PathBuf {
@@ -29,6 +32,77 @@ fn init_data_dir() -> std::io::Result<(PathBuf, PathBuf, PathBuf)> {
     let claudecode_db = data_dir.join("claudecode.db");
 
     Ok((arbor_db, cone_db, claudecode_db))
+}
+
+/// CLI arguments for substrate
+#[derive(Parser, Debug)]
+#[command(name = "substrate")]
+#[command(about = "Substrate plexus server - JSON-RPC over WebSocket or stdio")]
+struct Args {
+    /// Run in stdio mode for MCP compatibility (line-delimited JSON-RPC over stdin/stdout)
+    #[arg(long)]
+    stdio: bool,
+
+    /// Port for WebSocket server (ignored in stdio mode)
+    #[arg(short, long, default_value = "4444")]
+    port: u16,
+}
+
+/// Serve RPC module over stdio (MCP-compatible transport)
+async fn serve_stdio(module: RpcModule<()>) -> anyhow::Result<()> {
+    tracing::info!("Substrate plexus started in stdio mode (MCP-compatible)");
+    tracing::info!("Data directory: {}", substrate_data_dir().display());
+
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut lines = stdin.lines();
+
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        tracing::debug!("Received request: {}", trimmed);
+
+        // Call the same RpcModule used by WebSocket server
+        // Buffer size of 1024 messages for subscription notifications
+        let (response, mut sub_receiver) = module
+            .raw_json_request(trimmed, 1024)
+            .await
+            .map_err(|e| anyhow::anyhow!("RPC error: {}", e))?;
+
+        // Write initial response to stdout
+        let response_str = response.get();
+        stdout.write_all(response_str.as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+        stdout.flush().await?;
+
+        tracing::debug!("Sent response: {}", response_str);
+
+        // Spawn task to forward subscription notifications (if any)
+        // The receiver will be empty for non-subscription responses
+        tokio::spawn(async move {
+            while let Some(notification) = sub_receiver.recv().await {
+                let notification_str = notification.get();
+                tracing::debug!("Forwarding notification: {}", notification_str);
+
+                // Get a new stdout handle for each notification
+                let mut out = tokio::io::stdout();
+                if out.write_all(notification_str.as_bytes()).await.is_err() {
+                    break;
+                }
+                if out.write_all(b"\n").await.is_err() {
+                    break;
+                }
+                if out.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    Ok(())
 }
 
 /// Build the plexus with all activations registered
@@ -72,20 +146,47 @@ async fn build_plexus() -> Plexus {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Parse CLI arguments
+    let args = Args::parse();
+
     // Load .env file if present (silently ignore if not found)
     dotenvy::dotenv().ok();
 
     // Initialize tracing with filtering
-    // Show substrate and jsonrpsee, hide noisy lower-level crates entirely
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new(
-                "substrate=info,jsonrpsee=info,hyper=off,tokio=off,tower=off,sqlx=warn,h2=off,rustls=off"
-            )
-        });
+    // In debug builds, enable debug logging for substrate by default
+    // In stdio mode, reduce verbosity to avoid polluting stdout
+    let filter = if args.stdio {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
+                    "substrate=warn,jsonrpsee=warn"
+                )
+            })
+    } else {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| {
+                // Set base level to warn, then enable specific modules
+                // This hides sqlx and other noisy deps by default
+                #[cfg(debug_assertions)]
+                let default_filter = "warn,substrate=trace,hub_macro=trace";
+                #[cfg(not(debug_assertions))]
+                let default_filter = "warn,substrate=debug,hub_macro=debug";
+                tracing_subscriber::EnvFilter::new(default_filter)
+            })
+    };
+
+    // In stdio mode, send logs to stderr to keep stdout clean for JSON-RPC
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_writer(std::io::stderr)
         .init();
+
+    // Log level calibration sequence
+    tracing::error!("▓▓▓ SUBSTRATE BOOT SEQUENCE ▓▓▓");
+    tracing::warn!("  ├─ warn  :: caution signals armed");
+    tracing::info!("  ├─ info  :: telemetry online");
+    tracing::debug!("  ├─ debug :: introspection enabled");
+    tracing::trace!("  └─ trace :: full observability unlocked");
 
     // Build plexus with all activations
     let plexus = build_plexus().await;
@@ -97,39 +198,44 @@ async fn main() -> anyhow::Result<()> {
     // Convert plexus to RPC module for JSON-RPC server (consumes plexus)
     let module = plexus.into_rpc_module()?;
 
-    // Start server (guidance provided via stream events)
-    let port = std::env::var("SUBSTRATE_PORT").unwrap_or_else(|_| "4444".to_string());
-    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-    let server = Server::builder()
-        .build(addr)
-        .await?;
-    let handle: ServerHandle = server.start(module);
+    // Choose transport based on CLI flag
+    if args.stdio {
+        // Stdio transport (MCP-compatible)
+        serve_stdio(module).await
+    } else {
+        // WebSocket transport (default)
+        let addr: SocketAddr = format!("127.0.0.1:{}", args.port).parse()?;
+        let server = Server::builder()
+            .build(addr)
+            .await?;
+        let handle: ServerHandle = server.start(module);
 
-    tracing::info!("Substrate plexus started at ws://{}", addr);
-    tracing::info!("Data directory: {}", substrate_data_dir().display());
-    tracing::info!("Plexus hash: {}", plexus_hash);
-    tracing::info!("");
-    tracing::info!("Plexus methods ({}):", plexus_methods.len());
-    for method in &plexus_methods {
-        tracing::info!("  - {}", method);
-    }
-    tracing::info!("");
-    tracing::info!("Activations ({}):", activations.len());
-    for activation in &activations {
-        tracing::info!("  {} v{} - {}",
-            activation.namespace,
-            activation.version,
-            activation.description
-        );
-        for method in &activation.methods {
-            tracing::info!("    - {}_{}", activation.namespace, method);
+        tracing::info!("Substrate plexus started at ws://{}", addr);
+        tracing::info!("Data directory: {}", substrate_data_dir().display());
+        tracing::info!("Plexus hash: {}", plexus_hash);
+        tracing::info!("");
+        tracing::info!("Plexus methods ({}):", plexus_methods.len());
+        for method in &plexus_methods {
+            tracing::info!("  - {}", method);
         }
+        tracing::info!("");
+        tracing::info!("Activations ({}):", activations.len());
+        for activation in &activations {
+            tracing::info!("  {} v{} - {}",
+                activation.namespace,
+                activation.version,
+                activation.description
+            );
+            for method in &activation.methods {
+                tracing::info!("    - {}_{}", activation.namespace, method);
+            }
+        }
+        tracing::info!("");
+        tracing::info!("Total methods: {} (+{} plexus)", methods.len(), plexus_methods.len());
+
+        // Keep server running
+        handle.stopped().await;
+
+        Ok(())
     }
-    tracing::info!("");
-    tracing::info!("Total methods: {} (+{} plexus)", methods.len(), plexus_methods.len());
-
-    // Keep server running
-    handle.stopped().await;
-
-    Ok(())
 }

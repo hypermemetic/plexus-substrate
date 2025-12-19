@@ -4,7 +4,7 @@ use super::types::{
 };
 use crate::activations::arbor::{ArborStorage, Handle, NodeId, TreeId};
 use serde_json::Value;
-use sqlx::{sqlite::SqlitePool, Row};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, ConnectOptions, Row};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,7 +38,10 @@ impl ClaudeCodeStorage {
         arbor: Arc<ArborStorage>,
     ) -> Result<Self, ClaudeCodeError> {
         let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
-        let pool = SqlitePool::connect(&db_url)
+        let mut connect_options: SqliteConnectOptions = db_url.parse()
+            .map_err(|e| format!("Failed to parse database URL: {}", e))?;
+        connect_options.disable_statement_logging();
+        let pool = SqlitePool::connect_with(connect_options.clone())
             .await
             .map_err(|e| format!("Failed to connect to claudecode database: {}", e))?;
 
