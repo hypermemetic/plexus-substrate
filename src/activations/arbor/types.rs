@@ -124,7 +124,7 @@ pub struct Handle {
 }
 
 /// Node type discriminator
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum NodeType {
     /// Built-in text node (data stored in Arbor)
@@ -137,7 +137,7 @@ pub enum NodeType {
 }
 
 /// Resource state in deletion lifecycle
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceState {
     /// Fully accessible and mutable (ref_count >= 1)
@@ -168,7 +168,7 @@ impl ResourceState {
 }
 
 /// Reference counting information for a resource
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ResourceRefs {
     /// Total reference count
     pub ref_count: i64,
@@ -178,7 +178,7 @@ pub struct ResourceRefs {
 }
 
 /// A node in the conversation tree
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct Node {
     /// Unique identifier for this node
     pub id: NodeId,
@@ -217,7 +217,7 @@ pub struct Node {
 }
 
 /// A conversation tree
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct Tree {
     /// Unique identifier for this tree
     pub id: TreeId,
@@ -302,7 +302,7 @@ impl Tree {
 }
 
 /// Lightweight node representation (just structure, no data)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct NodeSkeleton {
     pub id: NodeId,
     pub parent: Option<NodeId>,
@@ -326,7 +326,7 @@ impl From<&Node> for NodeSkeleton {
 }
 
 /// Lightweight tree structure
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct TreeSkeleton {
     pub id: TreeId,
     pub root: NodeId,
@@ -351,7 +351,7 @@ impl From<&Tree> for TreeSkeleton {
 // ============================================================================
 
 /// Events emitted by Arbor operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type")]
 pub enum ArborEvent {
     // Tree events
