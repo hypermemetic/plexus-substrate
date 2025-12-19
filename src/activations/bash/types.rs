@@ -1,61 +1,29 @@
-use crate::{
-    plexus::{Provenance, types::PlexusStreamItem},
-    plugin_system::types::ActivationStreamItem,
-};
+use hub_macro::StreamEvent;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Stream events from bash command execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StreamEvent)]
+#[stream_event(content_type = "bash.event")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum BashEvent {
     /// Standard output line
-    #[serde(rename = "stdout")]
     Stdout { line: String },
 
     /// Standard error line
-    #[serde(rename = "stderr")]
     Stderr { line: String },
 
     /// Exit code when process completes
-    #[serde(rename = "exit")]
+    #[terminal]
     Exit { code: i32 },
-}
-
-impl ActivationStreamItem for BashEvent {
-    fn content_type() -> &'static str {
-        "bash.event"
-    }
-
-    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
-        PlexusStreamItem::data(
-            plexus_hash.to_string(),
-            provenance,
-            Self::content_type().to_string(),
-            serde_json::to_value(self).unwrap(),
-        )
-    }
-
-    fn is_terminal(&self) -> bool {
-        matches!(self, BashEvent::Exit { .. })
-    }
 }
 
 // Keep the old name as an alias for backwards compatibility
 pub type BashOutput = BashEvent;
 
-/// Error types for bash execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Error events from bash execution
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StreamEvent)]
+#[stream_event(content_type = "bash.error")]
 pub struct BashError {
     pub message: String,
-}
-
-impl ActivationStreamItem for BashError {
-    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
-        PlexusStreamItem::error(
-            plexus_hash.to_string(),
-            provenance,
-            self.message,
-            false,
-        )
-    }
 }
