@@ -8,7 +8,7 @@ use super::{
 use crate::plugin_system::types::ActivationStreamItem;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use jsonrpsee::{core::server::Methods, RpcModule, SubscriptionMessage};
+use jsonrpsee::{core::server::Methods, RpcModule};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, pin::Pin, sync::Arc};
@@ -453,7 +453,7 @@ impl Plexus {
             "plexus_hash",
             "plexus_hash",
             "plexus_unsubscribe_hash",
-            move |_params, pending, _ctx| {
+            move |_params, pending, _ctx, _ext| {
                 let hash = hash_for_hash_sub.clone();
                 async move {
                     let sink = pending.accept().await?;
@@ -463,12 +463,12 @@ impl Plexus {
                         "plexus.hash".to_string(),
                         serde_json::json!({ "hash": hash }),
                     );
-                    if let Ok(msg) = SubscriptionMessage::from_json(&response) {
-                        let _ = sink.send(msg).await;
+                    if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
+                        let _ = sink.send(raw_value).await;
                     }
                     let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(msg) = SubscriptionMessage::from_json(&done) {
-                        let _ = sink.send(msg).await;
+                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
+                        let _ = sink.send(raw_value).await;
                     }
                     Ok(())
                 }
@@ -481,7 +481,7 @@ impl Plexus {
             "plexus_schema",
             "plexus_schema",
             "plexus_unsubscribe_schema",
-            move |_params, pending, _ctx| {
+            move |_params, pending, _ctx, _ext| {
                 let schema = plexus_schema.clone();
                 let hash = hash_for_schema.clone();
                 async move {
@@ -492,12 +492,12 @@ impl Plexus {
                         "plexus.schema".to_string(),
                         serde_json::to_value(&schema).unwrap(),
                     );
-                    if let Ok(msg) = SubscriptionMessage::from_json(&response) {
-                        let _ = sink.send(msg).await;
+                    if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
+                        let _ = sink.send(raw_value).await;
                     }
                     let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(msg) = SubscriptionMessage::from_json(&done) {
-                        let _ = sink.send(msg).await;
+                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
+                        let _ = sink.send(raw_value).await;
                     }
                     Ok(())
                 }
@@ -518,7 +518,7 @@ impl Plexus {
             "plexus_activation_schema",
             "plexus_activation_schema",
             "plexus_unsubscribe_activation_schema",
-            move |params, pending, _ctx| {
+            move |params, pending, _ctx, _ext| {
                 let activations = activations_for_schema.clone();
                 let hash = hash_for_activation_schema.clone();
                 async move {
@@ -552,13 +552,13 @@ impl Plexus {
                                     ),
                                     false,
                                 );
-                                if let Ok(msg) = SubscriptionMessage::from_json(&error) {
-                                    let _ = sink.send(msg).await;
+                                if let Ok(raw_value) = serde_json::value::to_raw_value(&error) {
+                                    let _ = sink.send(raw_value).await;
                                 }
                                 let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                                if let Ok(msg) = SubscriptionMessage::from_json(&done) {
-                                    let _ = sink.send(msg).await;
-                                }
+                                if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
+                        let _ = sink.send(raw_value).await;
+                    }
                                 return Ok(());
                             }
                         } else {
@@ -574,9 +574,9 @@ impl Plexus {
                             content_type,
                             schema_value,
                         );
-                        if let Ok(msg) = SubscriptionMessage::from_json(&response) {
-                            let _ = sink.send(msg).await;
-                        }
+                        if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
+                        let _ = sink.send(raw_value).await;
+                    }
                     } else {
                         let error = PlexusStreamItem::error(
                             hash.clone(),
@@ -584,14 +584,14 @@ impl Plexus {
                             format!("Activation not found: {}", namespace),
                             false,
                         );
-                        if let Ok(msg) = SubscriptionMessage::from_json(&error) {
-                            let _ = sink.send(msg).await;
+                        if let Ok(raw_value) = serde_json::value::to_raw_value(&error) {
+                            let _ = sink.send(raw_value).await;
                         }
                     }
 
                     let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(msg) = SubscriptionMessage::from_json(&done) {
-                        let _ = sink.send(msg).await;
+                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
+                        let _ = sink.send(raw_value).await;
                     }
                     Ok(())
                 }
@@ -610,7 +610,7 @@ impl Plexus {
             "plexus_full_schema",
             "plexus_full_schema",
             "plexus_unsubscribe_full_schema",
-            move |params, pending, _ctx| {
+            move |params, pending, _ctx, _ext| {
                 let activations = activations_for_full_schema.clone();
                 let hash = hash_for_full_schema.clone();
                 async move {
@@ -626,9 +626,9 @@ impl Plexus {
                             "plexus.full_schema".to_string(),
                             serde_json::to_value(&full_schema).unwrap(),
                         );
-                        if let Ok(msg) = SubscriptionMessage::from_json(&response) {
-                            let _ = sink.send(msg).await;
-                        }
+                        if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
+                        let _ = sink.send(raw_value).await;
+                    }
                     } else {
                         let error = PlexusStreamItem::error(
                             hash.clone(),
@@ -636,14 +636,14 @@ impl Plexus {
                             format!("Activation not found: {}", namespace),
                             false,
                         );
-                        if let Ok(msg) = SubscriptionMessage::from_json(&error) {
-                            let _ = sink.send(msg).await;
+                        if let Ok(raw_value) = serde_json::value::to_raw_value(&error) {
+                            let _ = sink.send(raw_value).await;
                         }
                     }
 
                     let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(msg) = SubscriptionMessage::from_json(&done) {
-                        let _ = sink.send(msg).await;
+                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
+                        let _ = sink.send(raw_value).await;
                     }
                     Ok(())
                 }
