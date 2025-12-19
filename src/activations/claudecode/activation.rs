@@ -43,20 +43,20 @@ impl ClaudeCode {
         working_dir: String,
         model: Model,
         system_prompt: Option<String>,
-    ) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
+    ) -> impl Stream<Item = SessionEvent> + Send + 'static {
         let storage = self.storage.clone();
 
         stream! {
             match storage.session_create(name, working_dir, model, system_prompt, None, None).await {
                 Ok(config) => {
-                    yield ClaudeCodeEvent::Created {
+                    yield SessionEvent::Created {
                         claudecode_id: config.id,
                         head: config.head,
                         claude_session_id: None,
                     };
                 }
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                 }
             }
         }
@@ -73,7 +73,7 @@ impl ClaudeCode {
         name: String,
         prompt: String,
         ephemeral: Option<bool>,
-    ) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
+    ) -> impl Stream<Item = ChatEvent> + Send + 'static {
         let storage = self.storage.clone();
         let executor = self.executor.clone();
 
@@ -87,7 +87,7 @@ impl ClaudeCode {
             let config = match resolve_result {
                 Ok(c) => c,
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield ChatEvent::Error { message: e.to_string() };
                     return;
                 }
             };
@@ -104,7 +104,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(m) => m,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -117,7 +117,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(m) => m,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -134,7 +134,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(id) => id,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -147,7 +147,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(id) => id,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -155,8 +155,8 @@ impl ClaudeCode {
 
             let user_position = Position::new(config.head.tree_id, user_node_id);
 
-            // 4. Emit ChatStart
-            yield ClaudeCodeEvent::ChatStart {
+            // 4. Emit Start
+            yield ChatEvent::Start {
                 claudecode_id: session_id,
                 user_position,
             };
@@ -202,7 +202,7 @@ impl ClaudeCode {
                                 match delta {
                                     StreamDelta::TextDelta { text } => {
                                         response_content.push_str(&text);
-                                        yield ClaudeCodeEvent::ChatContent {
+                                        yield ChatEvent::Content {
                                             claudecode_id: session_id,
                                             content: text,
                                         };
@@ -224,7 +224,7 @@ impl ClaudeCode {
                                 if let (Some(id), Some(name)) = (current_tool_id.take(), current_tool_name.take()) {
                                     let input: Value = serde_json::from_str(&current_tool_input)
                                         .unwrap_or(Value::Object(serde_json::Map::new()));
-                                    yield ClaudeCodeEvent::ChatToolUse {
+                                    yield ChatEvent::ToolUse {
                                         claudecode_id: session_id,
                                         tool_name: name,
                                         tool_use_id: id,
@@ -246,14 +246,14 @@ impl ClaudeCode {
                                             // Only emit if we haven't already streamed this
                                             if response_content.is_empty() {
                                                 response_content.push_str(&text);
-                                                yield ClaudeCodeEvent::ChatContent {
+                                                yield ChatEvent::Content {
                                                     claudecode_id: session_id,
                                                     content: text,
                                                 };
                                             }
                                         }
                                         RawContentBlock::ToolUse { id, name, input } => {
-                                            yield ClaudeCodeEvent::ChatToolUse {
+                                            yield ChatEvent::ToolUse {
                                                 claudecode_id: session_id,
                                                 tool_name: name,
                                                 tool_use_id: id,
@@ -261,7 +261,7 @@ impl ClaudeCode {
                                             };
                                         }
                                         RawContentBlock::ToolResult { tool_use_id, content, is_error } => {
-                                            yield ClaudeCodeEvent::ChatToolResult {
+                                            yield ChatEvent::ToolResult {
                                                 claudecode_id: session_id,
                                                 tool_use_id,
                                                 output: content.unwrap_or_default(),
@@ -290,7 +290,7 @@ impl ClaudeCode {
                         // Check for error
                         if is_error == Some(true) {
                             if let Some(err_msg) = error {
-                                yield ClaudeCodeEvent::Error { message: err_msg };
+                                yield ChatEvent::Error { message: err_msg };
                                 return;
                             }
                         }
@@ -313,7 +313,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(m) => m,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -329,7 +329,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(m) => m,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -346,7 +346,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(id) => id,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -359,7 +359,7 @@ impl ClaudeCode {
                 ).await {
                     Ok(id) => id,
                     Err(e) => {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield ChatEvent::Error { message: e.to_string() };
                         return;
                     }
                 }
@@ -370,14 +370,14 @@ impl ClaudeCode {
             // 9. Update session head and Claude session ID (skip for ephemeral)
             if !is_ephemeral {
                 if let Err(e) = storage.session_update_head(&session_id, assistant_node_id, claude_session_id.clone()).await {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield ChatEvent::Error { message: e.to_string() };
                     return;
                 }
             }
 
-            // 10. Emit ChatComplete
+            // 10. Emit Complete
             // For ephemeral, new_head points to the ephemeral node (not the session's actual head)
-            yield ClaudeCodeEvent::ChatComplete {
+            yield ChatEvent::Complete {
                 claudecode_id: session_id,
                 new_head: if is_ephemeral { config.head } else { new_head },
                 claude_session_id: claude_session_id.unwrap_or_default(),
@@ -393,16 +393,16 @@ impl ClaudeCode {
 
     /// Get session configuration details
     #[hub_macro::hub_method]
-    async fn get(&self, name: String) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
+    async fn get(&self, name: String) -> impl Stream<Item = SessionEvent> + Send + 'static {
         let result = self.storage.session_get_by_name(&name).await;
 
         stream! {
             match result {
                 Ok(config) => {
-                    yield ClaudeCodeEvent::Data { config };
+                    yield SessionEvent::Data { config };
                 }
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                 }
             }
         }
@@ -410,16 +410,16 @@ impl ClaudeCode {
 
     /// List all Claude Code sessions
     #[hub_macro::hub_method]
-    async fn list(&self) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
+    async fn list(&self) -> impl Stream<Item = SessionEvent> + Send + 'static {
         let storage = self.storage.clone();
 
         stream! {
             match storage.session_list().await {
                 Ok(sessions) => {
-                    yield ClaudeCodeEvent::List { sessions };
+                    yield SessionEvent::List { sessions };
                 }
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                 }
             }
         }
@@ -427,7 +427,7 @@ impl ClaudeCode {
 
     /// Delete a session
     #[hub_macro::hub_method]
-    async fn delete(&self, name: String) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
+    async fn delete(&self, name: String) -> impl Stream<Item = SessionEvent> + Send + 'static {
         let storage = self.storage.clone();
         let resolve_result = storage.session_get_by_name(&name).await;
 
@@ -435,17 +435,17 @@ impl ClaudeCode {
             let config = match resolve_result {
                 Ok(c) => c,
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                     return;
                 }
             };
 
             match storage.session_delete(&config.id).await {
                 Ok(_) => {
-                    yield ClaudeCodeEvent::Deleted { claudecode_id: config.id };
+                    yield SessionEvent::Deleted { claudecode_id: config.id };
                 }
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                 }
             }
         }
@@ -457,7 +457,7 @@ impl ClaudeCode {
         &self,
         name: String,
         new_name: String,
-    ) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
+    ) -> impl Stream<Item = SessionEvent> + Send + 'static {
         let storage = self.storage.clone();
         let resolve_result = storage.session_get_by_name(&name).await;
 
@@ -466,7 +466,7 @@ impl ClaudeCode {
             let parent = match resolve_result {
                 Ok(c) => c,
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                     return;
                 }
             };
@@ -485,19 +485,19 @@ impl ClaudeCode {
                     // Update head to parent's position (share the same tree point)
                     // This creates a branch - the new session diverges from here
                     if let Err(e) = storage.session_update_head(&c.id, parent.head.node_id, None).await {
-                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        yield SessionEvent::Error { message: e.to_string() };
                         return;
                     }
                     c.head = parent.head;
                     c
                 }
                 Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    yield SessionEvent::Error { message: e.to_string() };
                     return;
                 }
             };
 
-            yield ClaudeCodeEvent::Created {
+            yield SessionEvent::Created {
                 claudecode_id: new_config.id,
                 head: new_config.head,
                 claude_session_id: None,  // Will fork Claude session on first chat
