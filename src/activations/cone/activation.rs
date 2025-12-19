@@ -1,85 +1,12 @@
-use super::methods::{ConeMethod, ConeIdentifier};
+use super::methods::ConeIdentifier;
 use super::storage::{ConeStorage, ConeStorageConfig};
-use super::types::{ConeEvent, ConeId, ChatUsage, MessageRole};
-use crate::{
-    plexus::{into_plexus_stream, Provenance, PlexusError, PlexusStream, Activation},
-    plugin_system::conversion::{IntoSubscription, SubscriptionResult},
-    activations::arbor::{Node, NodeId, NodeType},
-};
+use super::types::{ConeEvent, ChatUsage, MessageRole};
+use crate::activations::arbor::{Node, NodeId, NodeType};
 use async_stream::stream;
-use async_trait::async_trait;
 use cllient::{Message, ModelRegistry};
-use futures::{Stream, StreamExt};
-use jsonrpsee::{core::server::Methods, proc_macros::rpc, PendingSubscriptionSink};
-use serde_json::Value;
-use std::pin::Pin;
+use futures::Stream;
+use hub_macro::hub_methods;
 use std::sync::Arc;
-
-/// RPC interface for Cone plugin
-#[rpc(server, namespace = "cone")]
-pub trait ConeRpc {
-    /// Create a new cone
-    #[subscription(
-        name = "create",
-        unsubscribe = "unsubscribe_create",
-        item = serde_json::Value
-    )]
-    async fn create(
-        &self,
-        name: String,
-        model_id: String,
-        system_prompt: Option<String>,
-        metadata: Option<Value>,
-    ) -> SubscriptionResult;
-
-    /// Get an cone by ID
-    #[subscription(
-        name = "get",
-        unsubscribe = "unsubscribe_get",
-        item = serde_json::Value
-    )]
-    async fn get(&self, cone_id: String) -> SubscriptionResult;
-
-    /// List all cones
-    #[subscription(
-        name = "list",
-        unsubscribe = "unsubscribe_list",
-        item = serde_json::Value
-    )]
-    async fn list(&self) -> SubscriptionResult;
-
-    /// Delete an cone
-    #[subscription(
-        name = "delete",
-        unsubscribe = "unsubscribe_delete",
-        item = serde_json::Value
-    )]
-    async fn delete(&self, cone_id: String) -> SubscriptionResult;
-
-    /// Chat with an cone - appends prompt to context, calls LLM, advances head
-    #[subscription(
-        name = "chat",
-        unsubscribe = "unsubscribe_chat",
-        item = serde_json::Value
-    )]
-    async fn chat(&self, cone_id: String, prompt: String) -> SubscriptionResult;
-
-    /// Move cone's canonical head to a different node
-    #[subscription(
-        name = "set_head",
-        unsubscribe = "unsubscribe_set_head",
-        item = serde_json::Value
-    )]
-    async fn set_head(&self, cone_id: String, node_id: String) -> SubscriptionResult;
-
-    /// Get available LLM services and models
-    #[subscription(
-        name = "registry",
-        unsubscribe = "unsubscribe_registry",
-        item = serde_json::Value
-    )]
-    async fn registry(&self) -> SubscriptionResult;
-}
 
 /// Cone plugin - orchestrates LLM conversations with Arbor context
 #[derive(Clone)]
@@ -89,7 +16,10 @@ pub struct Cone {
 }
 
 impl Cone {
-    pub async fn new(config: ConeStorageConfig, arbor: Arc<crate::activations::arbor::ArborStorage>) -> Result<Self, String> {
+    pub async fn new(
+        config: ConeStorageConfig,
+        arbor: Arc<crate::activations::arbor::ArborStorage>,
+    ) -> Result<Self, String> {
         let storage = ConeStorage::new(config, arbor)
             .await
             .map_err(|e| format!("Failed to initialize cone storage: {}", e.message))?;
@@ -102,21 +32,31 @@ impl Cone {
             llm_registry: Arc::new(llm_registry),
         })
     }
+}
 
-    // ========================================================================
-    // Stream implementations
-    // ========================================================================
-
-    async fn create_stream(
+#[hub_methods(
+    namespace = "cone",
+    version = "1.0.0",
+    description = "LLM cone with persistent conversation context"
+)]
+impl Cone {
+    /// Create a new cone (LLM agent with persistent conversation context)
+    #[hub_macro::hub_method(params(
+        name = "Human-readable name for the cone",
+        model_id = "LLM model ID (e.g., 'gpt-4o-mini', 'claude-3-haiku-20240307')",
+        system_prompt = "Optional system prompt / instructions",
+        metadata = "Optional configuration metadata"
+    ))]
+    async fn create(
         &self,
         name: String,
         model_id: String,
         system_prompt: Option<String>,
-        metadata: Option<Value>,
-    ) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
+        metadata: Option<serde_json::Value>,
+    ) -> impl Stream<Item = ConeEvent> + Send + 'static {
         let storage = self.storage.clone();
 
-        Box::pin(stream! {
+        stream! {
             match storage.cone_create(name, model_id, system_prompt, metadata).await {
                 Ok(cone) => {
                     yield ConeEvent::ConeCreated {
@@ -128,16 +68,29 @@ impl Cone {
                     yield ConeEvent::Error { message: e.message };
                 }
             }
-        })
+        }
     }
 
-    async fn get_stream(
+    /// Get cone configuration by name or ID
+    #[hub_macro::hub_method(params(
+        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}"
+    ))]
+    async fn get(
         &self,
-        cone_id: ConeId,
-    ) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
+        identifier: ConeIdentifier,
+    ) -> impl Stream<Item = ConeEvent> + Send + 'static {
         let storage = self.storage.clone();
 
-        Box::pin(stream! {
+        stream! {
+            // Resolve identifier to ConeId
+            let cone_id = match storage.resolve_cone_identifier(&identifier).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ConeEvent::Error { message: e.message };
+                    return;
+                }
+            };
+
             match storage.cone_get(&cone_id).await {
                 Ok(cone) => {
                     yield ConeEvent::ConeData { cone };
@@ -146,13 +99,15 @@ impl Cone {
                     yield ConeEvent::Error { message: e.message };
                 }
             }
-        })
+        }
     }
 
-    async fn list_stream(&self) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
+    /// List all cones
+    #[hub_macro::hub_method]
+    async fn list(&self) -> impl Stream<Item = ConeEvent> + Send + 'static {
         let storage = self.storage.clone();
 
-        Box::pin(stream! {
+        stream! {
             match storage.cone_list().await {
                 Ok(cones) => {
                     yield ConeEvent::ConeList { cones };
@@ -161,16 +116,29 @@ impl Cone {
                     yield ConeEvent::Error { message: e.message };
                 }
             }
-        })
+        }
     }
 
-    async fn delete_stream(
+    /// Delete a cone (associated tree is preserved)
+    #[hub_macro::hub_method(params(
+        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}"
+    ))]
+    async fn delete(
         &self,
-        cone_id: ConeId,
-    ) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
+        identifier: ConeIdentifier,
+    ) -> impl Stream<Item = ConeEvent> + Send + 'static {
         let storage = self.storage.clone();
 
-        Box::pin(stream! {
+        stream! {
+            // Resolve identifier to ConeId
+            let cone_id = match storage.resolve_cone_identifier(&identifier).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ConeEvent::Error { message: e.message };
+                    return;
+                }
+            };
+
             match storage.cone_delete(&cone_id).await {
                 Ok(()) => {
                     yield ConeEvent::ConeDeleted { cone_id };
@@ -179,69 +147,32 @@ impl Cone {
                     yield ConeEvent::Error { message: e.message };
                 }
             }
-        })
+        }
     }
 
-    async fn set_head_stream(
+    /// Chat with a cone - appends prompt to context, calls LLM, advances head
+    #[hub_macro::hub_method(params(
+        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}",
+        prompt = "User message / prompt to send to the LLM"
+    ))]
+    async fn chat(
         &self,
-        cone_id: ConeId,
-        new_node_id: NodeId,
-    ) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
+        identifier: ConeIdentifier,
+        prompt: String,
+    ) -> impl Stream<Item = ConeEvent> + Send + 'static {
         let storage = self.storage.clone();
+        let llm_registry = self.llm_registry.clone();
 
-        Box::pin(stream! {
-            // Get current head first
-            let old_head = match storage.cone_get(&cone_id).await {
-                Ok(cone) => cone.head,
+        stream! {
+            // Resolve identifier to ConeId
+            let cone_id = match storage.resolve_cone_identifier(&identifier).await {
+                Ok(id) => id,
                 Err(e) => {
                     yield ConeEvent::Error { message: e.message };
                     return;
                 }
             };
 
-            // Advance to new node in same tree
-            let new_head = old_head.advance(new_node_id);
-
-            match storage.cone_update_head(&cone_id, new_node_id).await {
-                Ok(()) => {
-                    yield ConeEvent::HeadUpdated {
-                        cone_id,
-                        old_head,
-                        new_head,
-                    };
-                }
-                Err(e) => {
-                    yield ConeEvent::Error { message: e.message };
-                }
-            }
-        })
-    }
-
-    fn registry_stream(&self) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
-        let llm_registry = self.llm_registry.clone();
-
-        Box::pin(stream! {
-            let export = llm_registry.export();
-            yield ConeEvent::Registry(export);
-        })
-    }
-
-    /// Core chat implementation:
-    /// 1. Load cone config (get canonical_head)
-    /// 2. Build context from arbor path (resolve handles to messages)
-    /// 3. Store user message, create external node with handle
-    /// 4. Call LLM with full context
-    /// 5. Stream response, store assistant message, create external node
-    /// 6. Update canonical_head to the new response node
-    async fn chat_stream(
-        &self,
-        cone_id: ConeId,
-        prompt: String,
-    ) -> Pin<Box<dyn Stream<Item = ConeEvent> + Send + 'static>> {
-        let storage = self.storage.clone();
-        let llm_registry = self.llm_registry.clone();
-
-        Box::pin(stream! {
             // 1. Load cone config
             let cone = match storage.cone_get(&cone_id).await {
                 Ok(a) => a,
@@ -286,7 +217,6 @@ impl Cone {
             };
 
             // Create external node with handle pointing to user message
-            // TODO: Track actual user name in cone config or chat params
             let user_handle = ConeStorage::message_to_handle(&user_message, "user");
             let user_node_id = match storage.arbor().node_create_external(
                 &cone.head.tree_id,
@@ -340,6 +270,7 @@ impl Cone {
             let mut input_tokens: Option<i64> = None;
             let mut output_tokens: Option<i64> = None;
 
+            use futures::StreamExt;
             while let Some(event) = stream_result.next().await {
                 match event {
                     Ok(cllient::streaming::StreamEvent::Content(text)) => {
@@ -421,7 +352,67 @@ impl Cone {
                 new_head,
                 usage: usage_info,
             };
-        })
+        }
+    }
+
+    /// Move cone's canonical head to a different node in the tree
+    #[hub_macro::hub_method(params(
+        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}",
+        node_id = "UUID of the target node to set as the new head"
+    ))]
+    async fn set_head(
+        &self,
+        identifier: ConeIdentifier,
+        node_id: NodeId,
+    ) -> impl Stream<Item = ConeEvent> + Send + 'static {
+        let storage = self.storage.clone();
+
+        stream! {
+            // Resolve identifier to ConeId
+            let cone_id = match storage.resolve_cone_identifier(&identifier).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ConeEvent::Error { message: e.message };
+                    return;
+                }
+            };
+
+            // Get current head first
+            let old_head = match storage.cone_get(&cone_id).await {
+                Ok(cone) => cone.head,
+                Err(e) => {
+                    yield ConeEvent::Error { message: e.message };
+                    return;
+                }
+            };
+
+            // Advance to new node in same tree
+            let new_head = old_head.advance(node_id);
+
+            match storage.cone_update_head(&cone_id, node_id).await {
+                Ok(()) => {
+                    yield ConeEvent::HeadUpdated {
+                        cone_id,
+                        old_head,
+                        new_head,
+                    };
+                }
+                Err(e) => {
+                    yield ConeEvent::Error { message: e.message };
+                }
+            }
+        }
+    }
+
+    /// Get available LLM services and models
+    #[hub_macro::hub_method]
+    async fn registry(&self) -> impl Stream<Item = ConeEvent> + Send + 'static {
+        let llm_registry = self.llm_registry.clone();
+
+        stream! {
+            let export = llm_registry.export();
+            yield ConeEvent::Registry(export);
+        }
     }
 }
 
@@ -461,7 +452,6 @@ async fn resolve_context_to_messages(
                     }
                     "bash" => {
                         // TODO: Resolve bash output when bash plugin integration is added
-                        // For now, include as a system message indicating tool output
                         messages.push(Message::user(&format!(
                             "[Tool output from bash: {}]",
                             handle.identifier
@@ -480,260 +470,4 @@ async fn resolve_context_to_messages(
     }
 
     Ok(messages)
-}
-
-#[async_trait]
-impl ConeRpcServer for Cone {
-    async fn create(
-        &self,
-        pending: PendingSubscriptionSink,
-        name: String,
-        model_id: String,
-        system_prompt: Option<String>,
-        metadata: Option<Value>,
-    ) -> SubscriptionResult {
-        let stream = self.create_stream(name, model_id, system_prompt, metadata).await;
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-
-    async fn get(&self, pending: PendingSubscriptionSink, cone_id: String) -> SubscriptionResult {
-        let cone_id = match uuid::Uuid::parse_str(&cone_id) {
-            Ok(id) => id,
-            Err(e) => {
-                let stream: Pin<Box<dyn Stream<Item = ConeEvent> + Send>> = Box::pin(stream! {
-                    yield ConeEvent::Error { message: format!("Invalid cone ID: {}", e) };
-                });
-                return stream.into_subscription(pending, Provenance::root("cone")).await;
-            }
-        };
-
-        let stream = self.get_stream(cone_id).await;
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-
-    async fn list(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let stream = self.list_stream().await;
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-
-    async fn delete(
-        &self,
-        pending: PendingSubscriptionSink,
-        cone_id: String,
-    ) -> SubscriptionResult {
-        let cone_id = match uuid::Uuid::parse_str(&cone_id) {
-            Ok(id) => id,
-            Err(e) => {
-                let stream: Pin<Box<dyn Stream<Item = ConeEvent> + Send>> = Box::pin(stream! {
-                    yield ConeEvent::Error { message: format!("Invalid cone ID: {}", e) };
-                });
-                return stream.into_subscription(pending, Provenance::root("cone")).await;
-            }
-        };
-
-        let stream = self.delete_stream(cone_id).await;
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-
-    async fn chat(
-        &self,
-        pending: PendingSubscriptionSink,
-        cone_id: String,
-        prompt: String,
-    ) -> SubscriptionResult {
-        let cone_id = match uuid::Uuid::parse_str(&cone_id) {
-            Ok(id) => id,
-            Err(e) => {
-                let stream: Pin<Box<dyn Stream<Item = ConeEvent> + Send>> = Box::pin(stream! {
-                    yield ConeEvent::Error { message: format!("Invalid cone ID: {}", e) };
-                });
-                return stream.into_subscription(pending, Provenance::root("cone")).await;
-            }
-        };
-
-        let stream = self.chat_stream(cone_id, prompt).await;
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-
-    async fn set_head(
-        &self,
-        pending: PendingSubscriptionSink,
-        cone_id: String,
-        node_id: String,
-    ) -> SubscriptionResult {
-        let cone_id = match uuid::Uuid::parse_str(&cone_id) {
-            Ok(id) => id,
-            Err(e) => {
-                let stream: Pin<Box<dyn Stream<Item = ConeEvent> + Send>> = Box::pin(stream! {
-                    yield ConeEvent::Error { message: format!("Invalid cone ID: {}", e) };
-                });
-                return stream.into_subscription(pending, Provenance::root("cone")).await;
-            }
-        };
-
-        let node_id = match NodeId::parse_str(&node_id) {
-            Ok(id) => id,
-            Err(e) => {
-                let stream: Pin<Box<dyn Stream<Item = ConeEvent> + Send>> = Box::pin(stream! {
-                    yield ConeEvent::Error { message: format!("Invalid node ID: {}", e) };
-                });
-                return stream.into_subscription(pending, Provenance::root("cone")).await;
-            }
-        };
-
-        let stream = self.set_head_stream(cone_id, node_id).await;
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-
-    async fn registry(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let stream = self.registry_stream();
-        stream
-            .into_subscription(pending, Provenance::root("cone"))
-            .await
-    }
-}
-
-#[async_trait]
-impl Activation for Cone {
-    type Methods = ConeMethod;
-
-    fn namespace(&self) -> &str {
-        "cone"
-    }
-
-    fn version(&self) -> &str {
-        "1.0.0"
-    }
-
-    fn description(&self) -> &str {
-        "LLM cone with persistent conversation context"
-    }
-
-    fn methods(&self) -> Vec<&str> {
-        vec!["create", "get", "list", "delete", "chat", "set_head", "registry"]
-    }
-
-    fn method_help(&self, method: &str) -> Option<String> {
-        ConeMethod::description(method).map(|s| s.to_string())
-    }
-
-    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        let path = Provenance::root("cone");
-
-        match method {
-            "create" => {
-                let name = params
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'name'".into()))?
-                    .to_string();
-                let model_id = params
-                    .get("model_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'model_id'".into()))?
-                    .to_string();
-                let system_prompt = params
-                    .get("system_prompt")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let metadata = params.get("metadata").cloned();
-
-                let stream = self.create_stream(name, model_id, system_prompt, metadata).await;
-                Ok(into_plexus_stream(stream, path))
-            }
-            "get" => {
-                let identifier: ConeIdentifier = params
-                    .get("identifier")
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'identifier'".into()))
-                    .and_then(|v| serde_json::from_value(v.clone())
-                        .map_err(|e| PlexusError::InvalidParams(format!("invalid identifier: {}", e))))?;
-
-                let cone_id = self.storage.resolve_cone_identifier(&identifier).await
-                    .map_err(|e| PlexusError::ExecutionError(e.message))?;
-
-                let stream = self.get_stream(cone_id).await;
-                Ok(into_plexus_stream(stream, path))
-            }
-            "list" => {
-                let stream = self.list_stream().await;
-                Ok(into_plexus_stream(stream, path))
-            }
-            "delete" => {
-                let identifier: ConeIdentifier = params
-                    .get("identifier")
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'identifier'".into()))
-                    .and_then(|v| serde_json::from_value(v.clone())
-                        .map_err(|e| PlexusError::InvalidParams(format!("invalid identifier: {}", e))))?;
-
-                let cone_id = self.storage.resolve_cone_identifier(&identifier).await
-                    .map_err(|e| PlexusError::ExecutionError(e.message))?;
-
-                let stream = self.delete_stream(cone_id).await;
-                Ok(into_plexus_stream(stream, path))
-            }
-            "chat" => {
-                let identifier: ConeIdentifier = params
-                    .get("identifier")
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'identifier'".into()))
-                    .and_then(|v| serde_json::from_value(v.clone())
-                        .map_err(|e| PlexusError::InvalidParams(format!("invalid identifier: {}", e))))?;
-
-                let cone_id = self.storage.resolve_cone_identifier(&identifier).await
-                    .map_err(|e| PlexusError::ExecutionError(e.message))?;
-
-                let prompt = params
-                    .get("prompt")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'prompt'".into()))?
-                    .to_string();
-
-                let stream = self.chat_stream(cone_id, prompt).await;
-                Ok(into_plexus_stream(stream, path))
-            }
-            "set_head" => {
-                let identifier: ConeIdentifier = params
-                    .get("identifier")
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'identifier'".into()))
-                    .and_then(|v| serde_json::from_value(v.clone())
-                        .map_err(|e| PlexusError::InvalidParams(format!("invalid identifier: {}", e))))?;
-
-                let cone_id = self.storage.resolve_cone_identifier(&identifier).await
-                    .map_err(|e| PlexusError::ExecutionError(e.message))?;
-
-                let node_id_str = params
-                    .get("node_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| PlexusError::InvalidParams("missing 'node_id'".into()))?;
-                let node_id = NodeId::parse_str(node_id_str)
-                    .map_err(|e| PlexusError::InvalidParams(format!("invalid node_id: {}", e)))?;
-
-                let stream = self.set_head_stream(cone_id, node_id).await;
-                Ok(into_plexus_stream(stream, path))
-            }
-            "registry" => {
-                let stream = self.registry_stream();
-                Ok(into_plexus_stream(stream, path))
-            }
-            _ => Err(PlexusError::MethodNotFound {
-                activation: "cone".to_string(),
-                method: method.to_string(),
-            }),
-        }
-    }
-
-    fn into_rpc_methods(self) -> Methods {
-        self.into_rpc().into()
-    }
 }

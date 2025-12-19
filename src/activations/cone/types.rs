@@ -58,7 +58,7 @@ pub struct Message {
 
 /// A position in the context tree - couples tree_id and node_id together.
 /// This ensures we always have a valid reference into a specific tree.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Position {
     /// The tree containing this position
     pub tree_id: TreeId,
@@ -82,7 +82,7 @@ impl Position {
 }
 
 /// Cone configuration - defines an cone's identity and behavior
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConeConfig {
     /// Unique identifier for this cone
     pub id: ConeId,
@@ -116,7 +116,7 @@ impl ConeConfig {
 }
 
 /// Lightweight cone info (for listing)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConeInfo {
     pub id: ConeId,
     pub name: String,
@@ -138,7 +138,7 @@ impl From<&ConeConfig> for ConeInfo {
 }
 
 /// Events emitted by cone operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum ConeEvent {
     /// Cone created
@@ -204,11 +204,12 @@ pub enum ConeEvent {
 
     /// Registry information (available models and services)
     #[serde(rename = "registry")]
+    #[schemars(with = "serde_json::Value")]
     Registry(cllient::RegistryExport),
 }
 
 /// Token usage information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ChatUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
