@@ -63,11 +63,16 @@ impl ClaudeCode {
     }
 
     /// Chat with a session, streaming tokens like Cone
-    #[hub_macro::hub_method]
+    #[hub_macro::hub_method(params(
+        name = "Session name to chat with",
+        prompt = "User message / prompt to send",
+        ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
+    ))]
     async fn chat(
         &self,
         name: String,
         prompt: String,
+        ephemeral: Option<bool>,
     ) -> impl Stream<Item = ClaudeCodeEvent> + Send + 'static {
         let storage = self.storage.clone();
         let executor = self.executor.clone();
@@ -76,6 +81,8 @@ impl ClaudeCode {
         let resolve_result = storage.session_get_by_name(&name).await;
 
         stream! {
+            let is_ephemeral = ephemeral.unwrap_or(false);
+
             // 1. Resolve and load session
             let config = match resolve_result {
                 Ok(c) => c,
@@ -87,32 +94,62 @@ impl ClaudeCode {
 
             let session_id = config.id;
 
-            // 2. Store user message in our database
-            let user_msg = match storage.message_create(
-                &session_id,
-                MessageRole::User,
-                prompt.clone(),
-                None, None, None, None,
-            ).await {
-                Ok(m) => m,
-                Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
-                    return;
+            // 2. Store user message in our database (ephemeral if requested)
+            let user_msg = if is_ephemeral {
+                match storage.message_create_ephemeral(
+                    &session_id,
+                    MessageRole::User,
+                    prompt.clone(),
+                    None, None, None, None,
+                ).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                }
+            } else {
+                match storage.message_create(
+                    &session_id,
+                    MessageRole::User,
+                    prompt.clone(),
+                    None, None, None, None,
+                ).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
                 }
             };
 
-            // 3. Create user message node in Arbor
+            // 3. Create user message node in Arbor (ephemeral if requested)
             let user_handle = ClaudeCodeStorage::message_to_handle(&user_msg, "user");
-            let user_node_id = match storage.arbor().node_create_external(
-                &config.head.tree_id,
-                Some(config.head.node_id),
-                user_handle,
-                None,
-            ).await {
-                Ok(id) => id,
-                Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
-                    return;
+            let user_node_id = if is_ephemeral {
+                match storage.arbor().node_create_external_ephemeral(
+                    &config.head.tree_id,
+                    Some(config.head.node_id),
+                    user_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                }
+            } else {
+                match storage.arbor().node_create_external(
+                    &config.head.tree_id,
+                    Some(config.head.node_id),
+                    user_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
                 }
             };
 
@@ -262,51 +299,87 @@ impl ClaudeCode {
                 }
             }
 
-            // 7. Store assistant response
+            // 7. Store assistant response (ephemeral if requested)
             let model_id = format!("claude-code-{}", config.model.as_str());
-            let assistant_msg = match storage.message_create(
-                &session_id,
-                MessageRole::Assistant,
-                response_content,
-                Some(model_id),
-                None,
-                None,
-                cost_usd,
-            ).await {
-                Ok(m) => m,
-                Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
-                    return;
+            let assistant_msg = if is_ephemeral {
+                match storage.message_create_ephemeral(
+                    &session_id,
+                    MessageRole::Assistant,
+                    response_content,
+                    Some(model_id),
+                    None,
+                    None,
+                    cost_usd,
+                ).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                }
+            } else {
+                match storage.message_create(
+                    &session_id,
+                    MessageRole::Assistant,
+                    response_content,
+                    Some(model_id),
+                    None,
+                    None,
+                    cost_usd,
+                ).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
                 }
             };
 
-            // 8. Create assistant node in Arbor
+            // 8. Create assistant node in Arbor (ephemeral if requested)
             let assistant_handle = ClaudeCodeStorage::message_to_handle(&assistant_msg, "assistant");
-            let assistant_node_id = match storage.arbor().node_create_external(
-                &config.head.tree_id,
-                Some(user_node_id),
-                assistant_handle,
-                None,
-            ).await {
-                Ok(id) => id,
-                Err(e) => {
-                    yield ClaudeCodeEvent::Error { message: e.to_string() };
-                    return;
+            let assistant_node_id = if is_ephemeral {
+                match storage.arbor().node_create_external_ephemeral(
+                    &config.head.tree_id,
+                    Some(user_node_id),
+                    assistant_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                }
+            } else {
+                match storage.arbor().node_create_external(
+                    &config.head.tree_id,
+                    Some(user_node_id),
+                    assistant_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ClaudeCodeEvent::Error { message: e.to_string() };
+                        return;
+                    }
                 }
             };
 
             let new_head = Position::new(config.head.tree_id, assistant_node_id);
 
-            // 9. Update session head and Claude session ID
-            if let Err(e) = storage.session_update_head(&session_id, assistant_node_id, claude_session_id.clone()).await {
-                yield ClaudeCodeEvent::Error { message: e.to_string() };
-                return;
+            // 9. Update session head and Claude session ID (skip for ephemeral)
+            if !is_ephemeral {
+                if let Err(e) = storage.session_update_head(&session_id, assistant_node_id, claude_session_id.clone()).await {
+                    yield ClaudeCodeEvent::Error { message: e.to_string() };
+                    return;
+                }
             }
 
             // 10. Emit ChatComplete
+            // For ephemeral, new_head points to the ephemeral node (not the session's actual head)
             yield ClaudeCodeEvent::ChatComplete {
                 claudecode_id: session_id,
-                new_head,
+                new_head: if is_ephemeral { config.head } else { new_head },
                 claude_session_id: claude_session_id.unwrap_or_default(),
                 usage: Some(ChatUsage {
                     input_tokens: None,

@@ -430,6 +430,55 @@ impl ClaudeCodeStorage {
         })
     }
 
+    /// Create an ephemeral message (marked for deletion) and return it
+    pub async fn message_create_ephemeral(
+        &self,
+        session_id: &ClaudeCodeId,
+        role: MessageRole,
+        content: String,
+        model_id: Option<String>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+        cost_usd: Option<f64>,
+    ) -> Result<Message, ClaudeCodeError> {
+        let message_id = MessageId::new_v4();
+        let now = current_timestamp();
+
+        // Insert with a special marker in metadata or a separate flag
+        // For now, we'll use a negative timestamp as a deletion marker
+        // Messages with negative created_at are ephemeral and should be cleaned up
+        let ephemeral_marker = -now;
+
+        sqlx::query(
+            "INSERT INTO claudecode_messages (id, session_id, role, content, model_id, input_tokens, output_tokens, cost_usd, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(message_id.to_string())
+        .bind(session_id.to_string())
+        .bind(role.as_str())
+        .bind(&content)
+        .bind(&model_id)
+        .bind(input_tokens)
+        .bind(output_tokens)
+        .bind(cost_usd)
+        .bind(ephemeral_marker)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to create ephemeral message: {}", e))?;
+
+        Ok(Message {
+            id: message_id,
+            session_id: *session_id,
+            role,
+            content,
+            created_at: ephemeral_marker,
+            model_id,
+            input_tokens,
+            output_tokens,
+            cost_usd,
+        })
+    }
+
     /// Get a message by ID
     pub async fn message_get(&self, message_id: &MessageId) -> Result<Message, ClaudeCodeError> {
         let row = sqlx::query(
