@@ -768,6 +768,45 @@ impl ArborStorage {
         Ok(node_id)
     }
 
+    /// Create an external node that is already scheduled for deletion (ephemeral)
+    pub async fn node_create_external_ephemeral(
+        &self,
+        tree_id: &TreeId,
+        parent: Option<NodeId>,
+        handle: Handle,
+        metadata: Option<Value>,
+    ) -> Result<NodeId, ArborError> {
+        let node_id = NodeId::new();
+        let now = current_timestamp();
+
+        let metadata_json = metadata.map(|m| serde_json::to_string(&m).unwrap());
+
+        sqlx::query(
+            "INSERT INTO nodes (id, tree_id, parent_id, ref_count, state, scheduled_deletion_at, node_type, handle_source, handle_source_version, handle_identifier, handle_metadata, metadata, created_at)
+             VALUES (?, ?, ?, 0, 'scheduled_delete', ?, 'external', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(node_id.to_string())
+        .bind(tree_id.to_string())
+        .bind(parent.map(|p| p.to_string()))
+        .bind(now) // scheduled_deletion_at = now (will be cleaned up by cleanup_scheduled_trees)
+        .bind(&handle.source)
+        .bind(&handle.source_version)
+        .bind(&handle.identifier)
+        .bind(handle.metadata.as_ref().map(|m| serde_json::to_string(m).unwrap()))
+        .bind(metadata_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to create ephemeral external node: {}", e))?;
+
+        // Add to node_children table if parent is specified
+        if let Some(parent_id) = parent {
+            self.add_child_to_parent(&parent_id, &node_id).await?;
+        }
+
+        Ok(node_id)
+    }
+
     /// Get a node by ID
     pub async fn node_get(
         &self,
