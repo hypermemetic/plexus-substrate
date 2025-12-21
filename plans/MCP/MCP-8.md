@@ -4,6 +4,7 @@
 - **blocked_by:** [MCP-5, MCP-7]
 - **unlocks:** []
 - **priority:** Medium (not on critical path)
+- **assigned:** false
 
 ## Scope
 
