@@ -4,6 +4,7 @@
 - **blocked_by:** [MCP-9]
 - **unlocks:** [MCP-12]
 - **priority:** Low (optional feature)
+- **assigned:** false
 
 ## Scope
 
