@@ -19,6 +19,7 @@
 
 pub mod error;
 pub mod interface;
+pub mod schema;
 pub mod state;
 pub mod types;
 
