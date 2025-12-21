@@ -153,8 +153,22 @@ impl McpInterface {
         }
     }
 
+    /// Handle the `notifications/initialized` notification (MCP-6)
+    ///
+    /// This completes the initialization handshake. After this,
+    /// the server is fully operational and accepts all methods.
     async fn handle_initialized(&self, _params: Value) -> Result<Value, McpError> {
-        Err(McpError::NotImplemented("notifications/initialized".to_string()))
+        // Must be in Initializing state
+        self.state.require(McpState::Initializing)?;
+
+        // Transition to Ready
+        self.state.transition(McpState::Ready)?;
+
+        tracing::info!("MCP session initialized, now accepting requests");
+
+        // Notifications don't return a result
+        // The JSON-RPC layer should not send a response for notifications
+        Ok(Value::Null)
     }
 
     // === Utility Handlers (stubs - implemented in MCP-7) ===
@@ -230,9 +244,8 @@ mod tests {
         let mcp = McpInterface::new(plexus);
 
         // Stub methods should return NotImplemented until implemented
-        // Note: initialize is implemented (MCP-4)
+        // Note: initialize (MCP-4) and initialized (MCP-6) are implemented
         let stub_methods = [
-            "notifications/initialized",
             "ping",
             "tools/list",
             "tools/call",
@@ -323,5 +336,69 @@ mod tests {
         mcp.handle("initialize", params).await.unwrap();
 
         assert_eq!(mcp.state().current(), McpState::Initializing);
+    }
+
+    // === Initialized Tests (MCP-6) ===
+
+    #[tokio::test]
+    async fn test_initialized_success() {
+        let plexus = Arc::new(Plexus::new());
+        let mcp = McpInterface::new(plexus);
+
+        // First initialize
+        let init_params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "test-client", "version": "1.0.0" }
+        });
+        mcp.handle("initialize", init_params).await.unwrap();
+
+        // Then send initialized notification
+        let result = mcp.handle("notifications/initialized", Value::Null).await.unwrap();
+
+        // Notifications return null
+        assert_eq!(result, Value::Null);
+        // State should now be Ready
+        assert_eq!(mcp.state().current(), McpState::Ready);
+    }
+
+    #[tokio::test]
+    async fn test_initialized_wrong_state_uninitialized() {
+        let plexus = Arc::new(Plexus::new());
+        let mcp = McpInterface::new(plexus);
+
+        // Try to call initialized without initialize first
+        let result = mcp.handle("notifications/initialized", Value::Null).await;
+        assert!(matches!(result, Err(McpError::State(_))));
+    }
+
+    #[tokio::test]
+    async fn test_initialized_wrong_state_already_ready() {
+        let plexus = Arc::new(Plexus::new());
+        let mcp = McpInterface::new(plexus);
+
+        // Complete handshake
+        let init_params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "test-client", "version": "1.0.0" }
+        });
+        mcp.handle("initialize", init_params).await.unwrap();
+        mcp.handle("notifications/initialized", Value::Null).await.unwrap();
+
+        // Try to call initialized again
+        let result = mcp.handle("notifications/initialized", Value::Null).await;
+        assert!(matches!(result, Err(McpError::State(_))));
+    }
+
+    /// Helper to complete the full MCP handshake
+    async fn complete_handshake(mcp: &McpInterface) {
+        let init_params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "test-client", "version": "1.0.0" }
+        });
+        mcp.handle("initialize", init_params).await.unwrap();
+        mcp.handle("notifications/initialized", Value::Null).await.unwrap();
     }
 }
