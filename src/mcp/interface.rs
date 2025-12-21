@@ -8,10 +8,12 @@ use serde_json::Value;
 
 use super::{
     error::McpError,
+    schema::schemas_to_mcp_tools,
     state::{McpState, McpStateMachine},
     types::{
         InitializeParams, InitializeResult, LoggingCapability, ResourcesCapability,
-        ServerCapabilities, ServerInfo, ToolsCapability, SUPPORTED_VERSIONS,
+        ServerCapabilities, ServerInfo, ToolsCapability, ToolsListParams, ToolsListResult,
+        SUPPORTED_VERSIONS,
     },
 };
 use crate::plexus::Plexus;
@@ -177,10 +179,51 @@ impl McpInterface {
         Err(McpError::NotImplemented("ping".to_string()))
     }
 
-    // === Tool Handlers (stubs - implemented in MCP-5, MCP-9) ===
+    // === Tool Handlers ===
 
-    async fn handle_tools_list(&self, _params: Value) -> Result<Value, McpError> {
-        Err(McpError::NotImplemented("tools/list".to_string()))
+    /// Handle the `tools/list` request (MCP-5 + MCP-8)
+    ///
+    /// Returns a list of all available tools (Plexus activation methods).
+    /// Supports pagination via cursor.
+    async fn handle_tools_list(&self, params: Value) -> Result<Value, McpError> {
+        // Require Ready state
+        self.state.require_ready()?;
+
+        // Parse params (cursor is optional)
+        let params: ToolsListParams = serde_json::from_value(params).unwrap_or_default();
+
+        // Get all activation schemas and transform to MCP tools
+        let schemas = self.plexus.list_full_schemas();
+        let all_tools = schemas_to_mcp_tools(&schemas);
+
+        // Handle pagination (50 tools per page)
+        let (tools, next_cursor) = self.paginate(all_tools, params.cursor.as_deref(), 50);
+
+        let result = ToolsListResult { tools, next_cursor };
+
+        Ok(serde_json::to_value(result)?)
+    }
+
+    /// Paginate a list of items
+    fn paginate<T>(
+        &self,
+        items: Vec<T>,
+        cursor: Option<&str>,
+        page_size: usize,
+    ) -> (Vec<T>, Option<String>) {
+        let start = cursor
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let page: Vec<T> = items.into_iter().skip(start).take(page_size).collect();
+        let count = page.len();
+        let next = if count == page_size {
+            Some((start + page_size).to_string())
+        } else {
+            None
+        };
+
+        (page, next)
     }
 
     async fn handle_tools_call(&self, _params: Value) -> Result<Value, McpError> {
@@ -244,10 +287,9 @@ mod tests {
         let mcp = McpInterface::new(plexus);
 
         // Stub methods should return NotImplemented until implemented
-        // Note: initialize (MCP-4) and initialized (MCP-6) are implemented
+        // Note: initialize (MCP-4), initialized (MCP-6), tools/list (MCP-5/MCP-8) are implemented
         let stub_methods = [
             "ping",
-            "tools/list",
             "tools/call",
             "resources/list",
             "resources/read",
@@ -400,5 +442,45 @@ mod tests {
         });
         mcp.handle("initialize", init_params).await.unwrap();
         mcp.handle("notifications/initialized", Value::Null).await.unwrap();
+    }
+
+    // === Tools List Tests (MCP-5 + MCP-8) ===
+
+    #[tokio::test]
+    async fn test_tools_list_requires_ready() {
+        let plexus = Arc::new(Plexus::new());
+        let mcp = McpInterface::new(plexus);
+
+        // Without handshake, should fail
+        let result = mcp.handle("tools/list", Value::Null).await;
+        assert!(matches!(result, Err(McpError::State(_))));
+    }
+
+    #[tokio::test]
+    async fn test_tools_list_empty() {
+        let plexus = Arc::new(Plexus::new());
+        let mcp = McpInterface::new(plexus);
+        complete_handshake(&mcp).await;
+
+        let result = mcp.handle("tools/list", Value::Null).await.unwrap();
+
+        assert!(result["tools"].is_array());
+        assert_eq!(result["tools"].as_array().unwrap().len(), 0);
+        assert!(result["nextCursor"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_tools_list_with_cursor_param() {
+        let plexus = Arc::new(Plexus::new());
+        let mcp = McpInterface::new(plexus);
+        complete_handshake(&mcp).await;
+
+        // With cursor param
+        let result = mcp
+            .handle("tools/list", json!({ "cursor": "0" }))
+            .await
+            .unwrap();
+
+        assert!(result["tools"].is_array());
     }
 }

@@ -4,7 +4,7 @@
 - **blocked_by:** [MCP-5, MCP-7]
 - **unlocks:** []
 - **priority:** Medium (not on critical path)
-- **assigned:** false
+- **assigned:** true
 
 ## Scope
 
@@ -106,8 +106,8 @@ impl McpInterface {
 
 ## Acceptance Criteria
 
-- [ ] Lists all activation methods as MCP tools
-- [ ] Uses `namespace.method` naming
-- [ ] Supports pagination via cursor
-- [ ] Requires Ready state
-- [ ] Returns valid JSON Schema in inputSchema
+- [x] Lists all activation methods as MCP tools
+- [x] Uses `namespace.method` naming
+- [x] Supports pagination via cursor
+- [x] Requires Ready state
+- [x] Returns valid JSON Schema in inputSchema

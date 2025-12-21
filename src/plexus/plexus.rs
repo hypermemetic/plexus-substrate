@@ -369,6 +369,17 @@ impl Plexus {
         Some(activation.schema())
     }
 
+    /// Get full schemas for all registered activations including method param/return types
+    pub fn list_full_schemas(&self) -> Vec<ActivationFullSchema> {
+        let mut schemas: Vec<ActivationFullSchema> = self
+            .activations
+            .values()
+            .map(|a| a.full_schema())
+            .collect();
+        schemas.sort_by(|a, b| a.namespace.cmp(&b.namespace));
+        schemas
+    }
+
     /// Call a method on an activation
     ///
     /// Method format: "namespace.method" (e.g., "bash.execute", "health.check")
