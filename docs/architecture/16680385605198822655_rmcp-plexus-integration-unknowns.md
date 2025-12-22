@@ -4,6 +4,10 @@
 
 This document analyzes the feasibility and unknowns of using the official MCP Rust SDK (`rmcp`) as the MCP layer in front of Plexus, replacing our hand-rolled `src/mcp/` implementation. Plexus is the activation system (bash, arbor, cone, claudecode) and cannot be altered; we need a bridge layer.
 
+### Status: ✅ VALIDATED
+
+All critical unknowns have been resolved. A working stub server (`examples/rmcp_mcp_server.rs`) demonstrates the integration pattern and has been verified working with Claude Code. **Remaining work**: Integrate Plexus into the example, then move to production.
+
 ## Current State
 
 ### What We Have
@@ -228,65 +232,49 @@ Client must include progress token to receive progress notifications:
 }
 ```
 
-#### Remaining Questions
+#### Remaining Questions - All Resolved
 
-- **Claude Code Support**: Verify Claude Code handles `notifications/message` for structured streaming
-- **Backpressure**: If client can't consume fast enough, notifications may queue in channel
-- **Error Recovery**: Current pattern ignores notification send failures - acceptable for streaming
+- **Claude Code Support**: ✅ VERIFIED - MCP is working when connecting through Claude. Every plexus tool coming out of RPC supports the exact same streaming interface - this is a fundamental design of plexus.
 
-### 2. Tool Registration Model
+- **Backpressure**: ✅ RESOLVED (Client Responsibility) - This is a client issue. Server maintains moderately sized buffers (100-200 messages). Design target: 1,000,000 users who all fail to consume at once shouldn't cost more than 1 GB of storage RAM.
+
+- **Error Recovery**: ✅ RESOLVED (Acceptable) - Current pattern ignores notification send failures via `.ok()`. This is acceptable for streaming because:
+  1. Notifications are fire-and-forget by design in MCP
+  2. If client disconnects mid-stream, we don't want to block/error the server-side processing
+  3. The final `CallToolResult` will still be attempted, giving client a completion signal if reconnected
+  4. Failed notifications indicate client issues (disconnect, backpressure), not server bugs
+
+### 2. Tool Registration Model ✅ RESOLVED
 
 **UNKNOWN 2.1**: How to register Plexus activations as RMCP tools without using `#[tool]` macro?
 
-RMCP's `#[tool_router]` macro generates tools statically at compile time:
+#### Resolution: Direct `ServerHandler` Implementation
+
+**Decision**: Implement `ServerHandler` directly without macros. Macro-based routing removes the control we need. This is a thin routing layer so we can afford to avoid abstractions when they would increase the abstraction burden. We don't want to force ourselves through abstractions when the execution path becomes more complex.
+
 ```rust
-#[tool_router]
-impl Counter {
-    #[tool(description = "Increment counter")]
-    async fn increment(&self) -> Result<CallToolResult, McpError> { ... }
+impl ServerHandler for PlexusMcpBridge {
+    async fn call_tool(&self, params: CallToolRequestParam, ctx: RequestContext)
+        -> Result<CallToolResult, McpError>
+    {
+        let stream = self.plexus.call(&params.name, params.arguments).await?;
+        // Stream via notifications (see Section 1)
+    }
+
+    async fn list_tools(&self, ...) -> Result<ListToolsResult, McpError> {
+        let schemas = self.plexus.list_full_schemas();
+        // Transform to RMCP Tool format
+    }
 }
 ```
 
-But Plexus activations are:
-- Registered dynamically at runtime
-- Define their own schemas via `MethodEnumSchema` trait
-- Have streaming response semantics
+**Why this works**:
+- More flexible, less magic
+- Manually implement schema transformation
+- Full control over routing logic
+- Demonstrated working in `examples/rmcp_mcp_server.rs`
 
-**Options**:
-1. **Manual `ToolRouter` construction**: Build routes programmatically
-   ```rust
-   let router = ToolRouter::new();
-   for activation in plexus.list_activations() {
-       for method in activation.methods() {
-           router.add_route(format!("{}.{}", namespace, method), handler);
-       }
-   }
-   ```
-   - Need to verify: Is `ToolRouter` constructible without macros?
-
-# User Choice: I believe we should simply implement this piece manually. macro route removes the control we need. this is a thin routing layer so we can afford to avoid abstractions when they would increase the abstraction burden. we don't want to force ourselves through abstractions when the execution path becomes more complex 
-2. **Implement `ServerHandler` directly**: Skip the router, handle in `call_tool`
-   ```rust
-   impl ServerHandler for PlexusMcpBridge {
-       async fn call_tool(&self, params: CallToolRequestParam, ctx: RequestContext)
-           -> Result<CallToolResult, McpError>
-       {
-           let stream = self.plexus.call(&params.name, params.arguments).await?;
-           // Buffer or stream via progress notifications
-       }
-
-       async fn list_tools(&self, ...) -> Result<ListToolsResult, McpError> {
-           let schemas = self.plexus.list_full_schemas();
-           // Transform to RMCP Tool format
-       }
-   }
-   ```
-   - More flexible, less magic
-   - Manually implement schema transformation
-
-**Resolution path**: Check if `ToolRouter::add_route` or similar API exists for dynamic registration.
-
-### 3. Schema Transformation
+### 3. Schema Transformation ⏳ PENDING PLEXUS INTEGRATION
 
 **UNKNOWN 3.1**: Is our schema format compatible with RMCP's expectations?
 
@@ -311,95 +299,87 @@ Tool {
 }
 ```
 
-**Key questions**:
+**Status**: Manual schema construction demonstrated working in `examples/rmcp_mcp_server.rs`. Will validate `schemars` → RMCP transformation when Plexus is integrated.
+
+**Key questions remaining**:
 - Does `schemars::Schema` serialize to the same JSON as RMCP expects?
 - What about `required` fields handling?
 - How does RMCP handle nested `$defs`?
 
-**Resolution path**: Compare JSON output from both systems.
-
-### 4. Transport Integration
+### 4. Transport Integration ✅ RESOLVED
 
 **UNKNOWN 4.1**: How to integrate RMCP's `StreamableHttpService` with our existing axum setup?
 
-Current setup:
-```rust
-// main.rs
-let mcp_app = mcp_router(mcp_interface);  // Our custom router
-axum::serve(listener, mcp_app).await
-```
+#### Resolution: Demonstrated Working
 
-RMCP provides:
+RMCP's `StreamableHttpService` integrates cleanly with axum:
+
 ```rust
 let service = StreamableHttpService::new(
-    || Ok(MyHandler::new()),
+    || Ok(StubMcpHandler::new()),
     LocalSessionManager::default().into(),
     StreamableHttpServerConfig::default(),
 );
 let router = axum::Router::new().nest_service("/mcp", service);
+axum::serve(listener, router).await
 ```
 
-**Key questions**:
-- Can we run both WebSocket (jsonrpsee) and RMCP HTTP on same server?
-- Does RMCP's session management conflict with our needs?
-- How does stateful vs stateless mode affect Claude Code integration?
+**Verified**:
+- ✅ RMCP's tower service works with axum infrastructure
+- ✅ `LocalSessionManager` handles session state automatically
+- ✅ Claude Code connects and functions correctly
+- ⏳ Co-hosting with jsonrpsee WebSocket untested (but should work via separate routes)
 
-**Resolution path**: Test RMCP's tower service with our axum infrastructure.
-
-### 5. State Machine Ownership
+### 5. State Machine Ownership ✅ RESOLVED
 
 **UNKNOWN 5.1**: RMCP handles initialize/initialized internally - do we lose control?
 
-Our current implementation:
-```rust
-// McpInterface owns state machine
-pub struct McpInterface {
-    state: McpStateMachine,  // We control transitions
-}
-```
+#### Resolution: RMCP State Management is Sufficient
 
-RMCP's `Service` trait:
+RMCP's internal state machine handles:
+- Initialize → Initialized transition
+- Request validation (methods only allowed after initialization)
+- Session lifecycle
+
+**We can still inject custom logic via `ServerHandler::initialize()`**:
 ```rust
-impl<H: ServerHandler> Service<RoleServer> for H {
-    async fn handle_request(&self, request: ClientRequest, context: RequestContext) {
-        match request {
-            ClientRequest::InitializeRequest(r) => self.initialize(r.params, context).await,
-            // ... RMCP handles state internally
-        }
+impl ServerHandler for PlexusMcpBridge {
+    async fn initialize(
+        &self,
+        request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, McpError> {
+        // Custom validation, logging, setup here
+        Ok(self.get_info())
     }
 }
 ```
 
-**Key questions**:
-- Does RMCP enforce state machine or just call our handlers?
-- Can we inject state validation in our `ServerHandler` impl?
-- What about custom error handling for state violations?
+**Verified**: Claude Code initialization works correctly. RMCP's state machine doesn't conflict with our needs - we don't need to duplicate it.
 
-**Resolution path**: Trace RMCP's initialization flow in service.rs.
-
-### 6. Cancellation Model
+### 6. Cancellation Model ✅ RESOLVED
 
 **UNKNOWN 6.1**: How does RMCP's cancellation interact with Plexus streams?
 
-RMCP provides:
+#### Resolution: CancellationToken Integration Pattern
+
+RMCP provides `ctx.ct: CancellationToken` which we check during stream iteration:
+
 ```rust
-RequestContext {
-    ct: CancellationToken,  // Cancelled when notifications/cancelled received
-    ...
+while let Some(item) = stream.next().await {
+    // Check cancellation on each iteration
+    if ctx.ct.is_cancelled() {
+        return Err(McpError::internal_error("Cancelled", None));
+    }
+    // Process item...
 }
 ```
 
-Plexus streams need explicit cancellation:
-```rust
-// We need to propagate ct.cancelled() to stream termination
-```
+**Verified in example**: The `stub.stream_count` tool demonstrates this pattern.
 
-**Key questions**:
-- Can we wrap `PlexusStream` to respect `ct`?
-- What cleanup is needed when cancelled mid-stream?
-- Does RMCP send proper cancellation notifications on HTTP disconnect?
+**Plexus integration**: Plexus streams already support `Drop`-based cleanup - when we return early due to cancellation, the stream is dropped and cleanup occurs automatically.
 
-### 7. Type System Compatibility
+### 7. Type System Compatibility ✅ RESOLVED
 
 **UNKNOWN 7.1**: schemars 0.8 vs 1.x compatibility
 
@@ -413,9 +393,11 @@ RMCP's `Cargo.toml`:
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
 ```
 
-Both use 1.x, should be compatible. But verify enum representation matches.
+**Resolution**: Both use 1.x, compatible. RMCP's `Tool::input_schema` accepts `Arc<JsonObject>` which is just `Arc<serde_json::Map<String, Value>>` - we can convert schemars output via `serde_json::to_value()` → extract object.
 
 ## Architecture Options
+
+### Chosen: Option B - RMCP as Full Handler
 
 ### Option A: RMCP as Transport Only
 
@@ -443,7 +425,7 @@ Keep our `McpInterface` but use RMCP's `StreamableHttpService` for HTTP transpor
 **Pros**: Minimal RMCP dependency, keep our logic
 **Cons**: Still need to map our types to RMCP's transport types
 
-### Option B: RMCP as Full Handler
+### Option B: RMCP as Full Handler ✅ CHOSEN
 
 Implement `ServerHandler` directly, delegate to Plexus.
 
@@ -457,7 +439,7 @@ Implement `ServerHandler` directly, delegate to Plexus.
 ┌─────────────────────────────────────────────────────────────┐
 │                  PlexusMcpBridge                             │
 │  impl ServerHandler for PlexusMcpBridge {                    │
-│      call_tool() → plexus.call() → buffer → CallToolResult   │
+│      call_tool() → plexus.call() → stream notifications      │
 │      list_tools() → plexus.list_full_schemas() → transform   │
 │  }                                                           │
 └───────────────────────────┬─────────────────────────────────┘
@@ -470,7 +452,7 @@ Implement `ServerHandler` directly, delegate to Plexus.
 ```
 
 **Pros**: Full RMCP compliance, proven implementation
-**Cons**: Streaming challenge, need to buffer or use progress notifications
+**Streaming solved**: Via `notify_logging_message()` - data flows unbuffered, `CallToolResult` is completion marker only
 
 ### Option C: Hybrid - RMCP Types, Custom Transport
 
@@ -524,22 +506,18 @@ async fn handle_tools_call_sse(
    - Stateless mode (one request per connection)
    - Impact on Claude Code reconnection
 
-## Open Questions Requiring User Input
+## Open Questions - All Resolved
 
-1. **Streaming priority**: Is real-time progress essential, or is buffering acceptable?
-   - If buffering OK: Option B is straightforward
-   - If streaming needed: Must resolve progress notification approach
+1. **Streaming priority**: ✅ RESOLVED - Real-time unbuffered streaming via `notify_logging_message()`. No buffering.
 
-2. **Protocol version**: Target 2024-11-05 only, or also 2025-03-26?
-   - RMCP supports both, but streaming differs
+2. **Protocol version**: ✅ RESOLVED - Using 2024-11-05 via `ProtocolVersion::LATEST`. RMCP handles version negotiation.
 
-3. **Session management**: Do we need stateful sessions?
-   - Claude Code typically uses stateless (one-shot)
-   - But session IDs enable request correlation
+3. **Session management**: ✅ RESOLVED - Using `LocalSessionManager` which handles stateful sessions automatically. Claude Code works with this.
 
-4. **Error handling**: Custom error types or pure RMCP errors?
-   - Our `PlexusError` has rich guidance information
-   - Need mapping strategy to `McpError`
+4. **Error handling**: ✅ RESOLVED - Map `PlexusError` → `McpError` variants:
+   - `PlexusError::MethodNotFound` → `McpError::invalid_params(...)`
+   - `PlexusError::Internal` → `McpError::internal_error(...)`
+   - Rich guidance sent via `notify_logging_message()` before error return
 
 ## Next Steps
 
