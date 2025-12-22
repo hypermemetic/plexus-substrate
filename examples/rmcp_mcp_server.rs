@@ -170,9 +170,10 @@ impl ServerHandler for PlexusMcpBridge {
             .await
             .map_err(plexus_to_mcp_error)?;
 
-        // Stream events via notifications
-        let mut event_count = 0u64;
+        // Stream events via notifications AND buffer for final result
         let mut had_error = false;
+        let mut buffered_data: Vec<serde_json::Value> = Vec::new();
+        let mut error_messages: Vec<String> = Vec::new();
 
         tokio::pin!(stream);
         while let Some(item) = stream.next().await {
@@ -180,8 +181,6 @@ impl ServerHandler for PlexusMcpBridge {
             if ctx.ct.is_cancelled() {
                 return Err(McpError::internal_error("Cancelled", None));
             }
-
-            event_count += 1;
 
             match &item.event {
                 PlexusStreamEvent::Progress {
@@ -206,7 +205,10 @@ impl ServerHandler for PlexusMcpBridge {
                 PlexusStreamEvent::Data {
                     data, content_type, ..
                 } => {
-                    // Always stream data - PINNED: content_type handling TBD
+                    // Buffer data for final result
+                    buffered_data.push(data.clone());
+
+                    // Also stream via notifications for real-time consumers
                     let _ = ctx
                         .peer
                         .notify_logging_message(LoggingMessageNotificationParam {
@@ -224,6 +226,9 @@ impl ServerHandler for PlexusMcpBridge {
                 PlexusStreamEvent::Error {
                     error, recoverable, ..
                 } => {
+                    // Buffer errors for final result
+                    error_messages.push(error.clone());
+
                     let _ = ctx
                         .peer
                         .notify_logging_message(LoggingMessageNotificationParam {
@@ -260,16 +265,39 @@ impl ServerHandler for PlexusMcpBridge {
             }
         }
 
-        // Return completion marker - all data already streamed via notifications
+        // Return buffered data in the final result
         if had_error {
-            Ok(CallToolResult::error(vec![Content::text(
-                "Stream completed with errors - see notifications for details",
-            )]))
+            let error_content = if error_messages.is_empty() {
+                "Stream completed with errors".to_string()
+            } else {
+                error_messages.join("\n")
+            };
+            Ok(CallToolResult::error(vec![Content::text(error_content)]))
         } else {
-            Ok(CallToolResult::success(vec![Content::text(format!(
-                "Stream completed: {} events",
-                event_count
-            ))]))
+            // Convert buffered data to content
+            let content = if buffered_data.is_empty() {
+                vec![Content::text("(no output)")]
+            } else if buffered_data.len() == 1 {
+                // Single value - return as text if string, otherwise JSON
+                match &buffered_data[0] {
+                    serde_json::Value::String(s) => vec![Content::text(s.clone())],
+                    other => vec![Content::text(serde_json::to_string_pretty(other).unwrap_or_default())],
+                }
+            } else {
+                // Multiple values - join strings or return as JSON array
+                let all_strings = buffered_data.iter().all(|v| v.is_string());
+                if all_strings {
+                    let joined: String = buffered_data
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    vec![Content::text(joined)]
+                } else {
+                    vec![Content::text(serde_json::to_string_pretty(&buffered_data).unwrap_or_default())]
+                }
+            };
+            Ok(CallToolResult::success(content))
         }
     }
 }
