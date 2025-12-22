@@ -20,5 +20,5 @@ pub use plexus::{Activation, ActivationFullSchema, ActivationInfo, into_plexus_s
 pub use schema::{Schema, SchemaProperty, SchemaType};
 pub use method::{ActivationMethodsSchema, Method, MethodCollection, MethodSchema};
 pub use session_schema::{ListSchema, ProtocolSchema, SessionSchema};
-pub use types::{GuidanceErrorType, GuidanceSuggestion, PlexusStreamItem};
+pub use types::{GuidanceErrorType, GuidanceSuggestion, PlexusStreamEvent, PlexusStreamItem};
 pub use method_enum::MethodEnumSchema;
