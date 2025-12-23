@@ -8,9 +8,8 @@ use uuid::Uuid;
 
 /// Identifier for a cone - either by name or UUID
 ///
-/// Tagged enum with two variants:
-/// - `{"by_name": {"name": "assistant"}}` - lookup by name (supports partial matching)
-/// - `{"by_id": {"id": "550e8400-e29b-41d4-a716-446655440000"}}` - lookup by UUID
+/// CLI usage: Just pass the name or UUID directly (e.g., "my-assistant" or "550e8400-...")
+/// The CLI/API will handle the conversion to the appropriate lookup type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConeIdentifier {
