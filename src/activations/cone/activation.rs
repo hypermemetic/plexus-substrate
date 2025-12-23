@@ -82,7 +82,7 @@ impl Cone {
 
     /// Get cone configuration by name or ID
     #[hub_macro::hub_method(params(
-        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}"
+        identifier = "Cone name or UUID (e.g., 'my-assistant' or '550e8400-e29b-...')"
     ))]
     async fn get(
         &self,
@@ -130,7 +130,7 @@ impl Cone {
 
     /// Delete a cone (associated tree is preserved)
     #[hub_macro::hub_method(params(
-        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}"
+        identifier = "Cone name or UUID (e.g., 'my-assistant' or '550e8400-e29b-...')"
     ))]
     async fn delete(
         &self,
@@ -161,7 +161,7 @@ impl Cone {
 
     /// Chat with a cone - appends prompt to context, calls LLM, advances head
     #[hub_macro::hub_method(params(
-        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}",
+        identifier = "Cone name or UUID (e.g., 'my-assistant' or '550e8400-e29b-...')",
         prompt = "User message / prompt to send to the LLM",
         ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
     ))]
@@ -437,7 +437,7 @@ impl Cone {
 
     /// Move cone's canonical head to a different node in the tree
     #[hub_macro::hub_method(params(
-        identifier = "Cone identifier - use {by_name: {name: '...'}} or {by_id: {id: '...'}}",
+        identifier = "Cone name or UUID (e.g., 'my-assistant' or '550e8400-e29b-...')",
         node_id = "UUID of the target node to set as the new head"
     ))]
     async fn set_head(
