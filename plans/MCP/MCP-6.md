@@ -4,6 +4,7 @@
 - **blocked_by:** [MCP-4]
 - **unlocks:** [MCP-7]
 - **priority:** Critical (on critical path)
+- **assigned:** true
 
 ## Scope
 
@@ -54,7 +55,7 @@ impl McpInterface {
 
 ## Acceptance Criteria
 
-- [ ] Only succeeds if state is `Initializing`
-- [ ] Transitions state to `Ready`
-- [ ] Returns no response (notification semantics)
-- [ ] Logs successful initialization
+- [x] Only succeeds if state is `Initializing`
+- [x] Transitions state to `Ready`
+- [x] Returns no response (notification semantics)
+- [x] Logs successful initialization

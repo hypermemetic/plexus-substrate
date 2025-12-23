@@ -1,38 +1,14 @@
 use substrate::{
-    plexus::Plexus,
-    activations::{
-        bash::Bash,
-        health::Health,
-        arbor::{ArborConfig, ArborStorage, Arbor},
-        cone::{ConeStorageConfig, Cone},
-        claudecode::{ClaudeCode, ClaudeCodeStorage, ClaudeCodeStorageConfig},
-    },
+    build_plexus,
+    builder::substrate_data_dir,
+    mcp::{McpInterface, transport::mcp_router},
 };
 use jsonrpsee::server::{Server, ServerHandle};
 use jsonrpsee::RpcModule;
 use clap::Parser;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-/// Get the substrate data directory in the current working directory
-fn substrate_data_dir() -> PathBuf {
-    let cwd = std::env::current_dir().expect("Failed to get current working directory");
-    cwd.join(".substrate")
-}
-
-/// Ensure the substrate data directory exists and return paths for databases
-fn init_data_dir() -> std::io::Result<(PathBuf, PathBuf, PathBuf)> {
-    let data_dir = substrate_data_dir();
-    std::fs::create_dir_all(&data_dir)?;
-
-    let arbor_db = data_dir.join("arbor.db");
-    let cone_db = data_dir.join("cone.db");
-    let claudecode_db = data_dir.join("claudecode.db");
-
-    Ok((arbor_db, cone_db, claudecode_db))
-}
 
 /// CLI arguments for substrate
 #[derive(Parser, Debug)]
@@ -105,45 +81,6 @@ async fn serve_stdio(module: RpcModule<()>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the plexus with all activations registered
-async fn build_plexus() -> Plexus {
-    let (arbor_db, cone_db, claudecode_db) = init_data_dir()
-        .expect("Failed to initialize substrate data directory");
-
-    // Create shared arbor storage
-    let arbor_config = ArborConfig {
-        db_path: arbor_db,
-        ..ArborConfig::default()
-    };
-    let arbor_storage = Arc::new(
-        ArborStorage::new(arbor_config)
-            .await
-            .expect("Failed to initialize Arbor storage")
-    );
-
-    // Cone shares the same arbor storage
-    let cone_config = ConeStorageConfig {
-        db_path: cone_db,
-    };
-
-    // ClaudeCode shares the same arbor storage
-    let claudecode_config = ClaudeCodeStorageConfig {
-        db_path: claudecode_db,
-    };
-    let claudecode_storage = Arc::new(
-        ClaudeCodeStorage::new(claudecode_config, arbor_storage.clone())
-            .await
-            .expect("Failed to initialize ClaudeCode storage")
-    );
-
-    Plexus::new()
-        .register(Health::new())
-        .register(Bash::new())
-        .register(Arbor::with_storage(arbor_storage.clone()))
-        .register(Cone::new(cone_config, arbor_storage).await.unwrap())
-        .register(ClaudeCode::new(claudecode_storage))
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
@@ -203,14 +140,30 @@ async fn main() -> anyhow::Result<()> {
         // Stdio transport (MCP-compatible)
         serve_stdio(module).await
     } else {
-        // WebSocket transport (default)
-        let addr: SocketAddr = format!("127.0.0.1:{}", args.port).parse()?;
-        let server = Server::builder()
-            .build(addr)
-            .await?;
-        let handle: ServerHandle = server.start(module);
+        // WebSocket transport (default) + MCP HTTP endpoint
+        let ws_addr: SocketAddr = format!("127.0.0.1:{}", args.port).parse()?;
+        let mcp_addr: SocketAddr = format!("127.0.0.1:{}", args.port + 1).parse()?;
 
-        tracing::info!("Substrate plexus started at ws://{}", addr);
+        // Start WebSocket server for Plexus RPC
+        let ws_server = Server::builder()
+            .build(ws_addr)
+            .await?;
+        let ws_handle: ServerHandle = ws_server.start(module);
+
+        // Build MCP interface with a fresh Plexus (since module consumed the first one)
+        let mcp_plexus = Arc::new(build_plexus().await);
+        let mcp_interface = Arc::new(McpInterface::new(mcp_plexus));
+        let mcp_app = mcp_router(mcp_interface);
+
+        // Start MCP HTTP server
+        let mcp_listener = tokio::net::TcpListener::bind(mcp_addr).await?;
+        let mcp_handle = tokio::spawn(async move {
+            axum::serve(mcp_listener, mcp_app).await
+        });
+
+        tracing::info!("Substrate plexus started");
+        tracing::info!("  WebSocket: ws://{}", ws_addr);
+        tracing::info!("  MCP HTTP:  http://{}/mcp", mcp_addr);
         tracing::info!("Data directory: {}", substrate_data_dir().display());
         tracing::info!("Plexus hash: {}", plexus_hash);
         tracing::info!("");
@@ -233,8 +186,19 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("");
         tracing::info!("Total methods: {} (+{} plexus)", methods.len(), plexus_methods.len());
 
-        // Keep server running
-        handle.stopped().await;
+        // Wait for either server to stop
+        tokio::select! {
+            _ = ws_handle.stopped() => {
+                tracing::info!("WebSocket server stopped");
+            }
+            result = mcp_handle => {
+                match result {
+                    Ok(Ok(())) => tracing::info!("MCP server stopped"),
+                    Ok(Err(e)) => tracing::error!("MCP server error: {}", e),
+                    Err(e) => tracing::error!("MCP server task failed: {}", e),
+                }
+            }
+        }
 
         Ok(())
     }
