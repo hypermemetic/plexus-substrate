@@ -2,8 +2,9 @@
 
 ## Metadata
 - **blocked_by:** [MCP-2]
-- **unlocks:** [MCP-10]
+- **unlocks:** [MCP-9]
 - **priority:** High
+- **assigned:** true
 
 ## Scope
 
@@ -58,7 +59,7 @@ impl McpInterface {
 
 ## Acceptance Criteria
 
-- [ ] `McpInterface` struct holding Plexus + state machine
-- [ ] `handle()` method with routing to handlers (stubs initially)
-- [ ] Server info populated from Cargo.toml
-- [ ] All handlers return `McpError::NotImplemented` initially
+- [x] `McpInterface` struct holding Plexus + state machine
+- [x] `handle()` method with routing to handlers (stubs initially)
+- [x] Server info populated from Cargo.toml
+- [x] All handlers return `McpError::NotImplemented` initially

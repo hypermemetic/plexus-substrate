@@ -4,6 +4,7 @@
 - **blocked_by:** [MCP-2]
 - **unlocks:** [MCP-8]
 - **priority:** High
+- **assigned:** true
 
 ## Scope
 
@@ -100,8 +101,8 @@ fn infer_schema_from_type(type_name: &str) -> Value {
 
 ## Acceptance Criteria
 
-- [ ] Transforms all activation methods to MCP tools
-- [ ] Uses `namespace.method` naming convention
-- [ ] Generates valid JSON Schema for inputSchema
-- [ ] Handles optional parameters correctly
-- [ ] Unit tests with sample Plexus schema
+- [x] Transforms all activation methods to MCP tools
+- [x] Uses `namespace.method` naming convention
+- [x] Generates valid JSON Schema for inputSchema
+- [x] Handles optional parameters correctly
+- [x] Unit tests with sample Plexus schema

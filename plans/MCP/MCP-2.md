@@ -4,6 +4,7 @@
 - **blocked_by:** []
 - **unlocks:** [MCP-3, MCP-4, MCP-5]
 - **priority:** Critical (on critical path)
+- **assigned:** true
 
 ## Scope
 
@@ -74,8 +75,8 @@ impl McpStateMachine {
 
 ## Acceptance Criteria
 
-- [ ] `McpState` enum with 4 states
-- [ ] `McpStateMachine` with `transition()` and `require()` methods
-- [ ] Invalid transitions return error
-- [ ] Thread-safe (uses `RwLock`)
-- [ ] Unit tests for state transitions
+- [x] `McpState` enum with 4 states
+- [x] `McpStateMachine` with `transition()` and `require()` methods
+- [x] Invalid transitions return error
+- [x] Thread-safe (uses `RwLock`)
+- [x] Unit tests for state transitions
