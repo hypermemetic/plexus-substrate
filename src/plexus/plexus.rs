@@ -1,20 +1,32 @@
+//! Plexus - the central routing layer for activations
+//!
+//! Plexus IS an activation that also serves as the registry for other activations.
+//! It implements the "caller-wraps" streaming architecture.
+
 use super::{
     context::PlexusContext,
-    guidance::{error_stream_with_guidance, ActivationGuidanceInfo, CustomGuidance},
-    path::Provenance,
+    method_enum::MethodEnumSchema,
     schema::Schema,
-    types::{GuidanceSuggestion, PlexusStreamItem},
+    streaming::{wrap_stream, PlexusStream},
+    types::{PlexusStreamItem, StreamMetadata},
 };
-use crate::activations::arbor::Handle;
-use crate::plugin_system::types::ActivationStreamItem;
+use crate::types::Handle;
+use async_stream::stream;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use jsonrpsee::{core::server::Methods, RpcModule};
+use jsonrpsee::core::{server::Methods, SubscriptionResult};
+use jsonrpsee::{proc_macros::rpc, PendingSubscriptionSink, RpcModule};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, pin::Pin, sync::{Arc, Weak}};
+use std::pin::Pin;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-/// Error type for plexus operations
+// ============================================================================
+// Error Types
+// ============================================================================
+
 #[derive(Debug, Clone)]
 pub enum PlexusError {
     ActivationNotFound(String),
@@ -42,11 +54,11 @@ impl std::fmt::Display for PlexusError {
 
 impl std::error::Error for PlexusError {}
 
-/// Type alias for plexus streams
-pub type PlexusStream = Pin<Box<dyn Stream<Item = PlexusStreamItem> + Send + 'static>>;
+// ============================================================================
+// Schema Types
+// ============================================================================
 
-/// Information about an activation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActivationInfo {
     pub namespace: String,
     pub version: String,
@@ -54,7 +66,6 @@ pub struct ActivationInfo {
     pub methods: Vec<String>,
 }
 
-/// Schema for a single method including params and return type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MethodSchemaInfo {
     pub name: String,
@@ -65,7 +76,6 @@ pub struct MethodSchemaInfo {
     pub returns: Option<schemars::Schema>,
 }
 
-/// Full schema for an activation including all methods with their input/output types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivationFullSchema {
     pub namespace: String,
@@ -74,121 +84,27 @@ pub struct ActivationFullSchema {
     pub methods: Vec<MethodSchemaInfo>,
 }
 
-/// Plexus schema response - all activations and their methods
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlexusSchema {
-    pub activations: Vec<ActivationInfo>,
-    pub total_methods: usize,
-}
-
-/// Activation trait - implement this to create an activation
-///
-/// This is the main trait that activation implementations provide. It includes
-/// an associated `Methods` type which enables automatic schema generation.
-///
-/// # Example
-/// ```ignore
-/// #[derive(Clone)]
-/// pub struct MyActivation;
-///
-/// #[async_trait]
-/// impl Activation for MyActivation {
-///     type Methods = MyMethod;  // Enum with #[derive(JsonSchema, Serialize)]
-///
-///     fn namespace(&self) -> &str { "my_activation" }
-///     fn version(&self) -> &str { "1.0.0" }
-///     async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-///         // ... implementation
-///     }
-///     fn into_rpc_methods(self) -> Methods {
-///         self.into_rpc().into()
-///     }
-/// }
-/// ```
-use super::method_enum::MethodEnumSchema;
+// ============================================================================
+// Activation Trait
+// ============================================================================
 
 #[async_trait]
-pub trait Activation: Send + Sync + Clone + 'static {
-    /// The Method enum type defining all methods this activation supports
-    ///
-    /// This type must implement JsonSchema, Serialize, and MethodEnumSchema.
-    /// The schema will be automatically generated with proper const discriminators.
+pub trait Activation: Send + Sync + 'static {
     type Methods: MethodEnumSchema;
 
-    /// Activation namespace (e.g., "health", "bash", "arbor")
     fn namespace(&self) -> &str;
-
-    /// Activation version (semantic versioning: "MAJOR.MINOR.PATCH")
     fn version(&self) -> &str;
-
-    /// Activation description (one-line summary)
-    fn description(&self) -> &str {
-        "No description available"
-    }
-
-    /// List available methods
+    fn description(&self) -> &str { "No description available" }
     fn methods(&self) -> Vec<&str>;
+    fn method_help(&self, _method: &str) -> Option<String> { None }
 
-    /// Get help text for a specific method
-    fn method_help(&self, _method: &str) -> Option<String> {
-        None
-    }
-
-    /// Provide custom guidance for an error (optional override)
-    ///
-    /// Activations can override this to provide method-specific suggestions,
-    /// example parameters, or custom recovery steps.
-    ///
-    /// # Example
-    /// ```ignore
-    /// fn custom_guidance(&self, method: &str, error: &PlexusError) -> Option<GuidanceSuggestion> {
-    ///     match (method, error) {
-    ///         ("execute", PlexusError::InvalidParams(_)) => {
-    ///             Some(GuidanceSuggestion::TryMethod {
-    ///                 method: "bash.execute".to_string(),
-    ///                 example_params: Some(json!("echo 'Hello!'")),
-    ///             })
-    ///         }
-    ///         _ => None,
-    ///     }
-    /// }
-    /// ```
-    fn custom_guidance(&self, _method: &str, _error: &PlexusError) -> Option<GuidanceSuggestion> {
-        None // Default: no custom guidance
-    }
-
-    /// Call a method by name with JSON params, returns a stream
     async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError>;
-
-    /// Inject hub reference during construction
-    ///
-    /// Called during Plexus construction to give activations access to the hub.
-    /// Activations that need hub access (e.g., for resolving foreign handles when
-    /// walking arbor trees) should store this as `OnceLock<Weak<Plexus>>`.
-    ///
-    /// Default implementation is a no-op for activations that don't need hub access.
-    fn set_hub(&self, _hub: Weak<Plexus>) {
-        // Default: no-op for activations that don't need hub access
-    }
-
-    /// Resolve a handle created by this activation
-    ///
-    /// Default implementation returns HandleNotSupported error.
-    /// Activations that create handles should override this to resolve them.
-    ///
-    /// Note: Activations that need hub access for resolving foreign handles
-    /// should store the hub reference via `set_hub` and use `self.hub()`.
     async fn resolve_handle(&self, _handle: &Handle) -> Result<PlexusStream, PlexusError> {
         Err(PlexusError::HandleNotSupported(self.namespace().to_string()))
     }
 
-    /// Convert this activation into RPC methods for JSON-RPC server
-    fn into_rpc_methods(self) -> Methods;
+    fn into_rpc_methods(self) -> Methods where Self: Sized;
 
-    /// Get full schema including method params and return types
-    ///
-    /// Default implementation returns basic info without param/return schemas.
-    /// Macro-generated activations override this with full type information.
     fn full_schema(&self) -> ActivationFullSchema {
         ActivationFullSchema {
             namespace: self.namespace().to_string(),
@@ -206,727 +122,542 @@ pub trait Activation: Send + Sync + Clone + 'static {
     }
 }
 
-/// Internal wrapper that type-erases Activation into a trait object
-///
-/// This wrapper converts `Activation` (which has an associated type) into
-/// `ActivationObject` (which is trait-object-safe). Users don't interact with
-/// this directly - `Plexus::register()` handles the wrapping automatically.
+// ============================================================================
+// Internal Type-Erased Activation
+// ============================================================================
+
+#[async_trait]
+trait ActivationObject: Send + Sync + 'static {
+    fn namespace(&self) -> &str;
+    fn version(&self) -> &str;
+    fn description(&self) -> &str;
+    fn methods(&self) -> Vec<&str>;
+    fn method_help(&self, method: &str) -> Option<String>;
+    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError>;
+    async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError>;
+    fn full_schema(&self) -> ActivationFullSchema;
+    fn schema(&self) -> Schema;
+}
+
 struct ActivationWrapper<A: Activation> {
     inner: A,
 }
 
-impl<A: Activation> ActivationWrapper<A> {
-    fn new(activation: A) -> Self {
-        Self { inner: activation }
-    }
-}
-
-/// Implement trait-object-safe ActivationObject for the wrapper
 #[async_trait]
 impl<A: Activation> ActivationObject for ActivationWrapper<A> {
-    fn namespace(&self) -> &str {
-        self.inner.namespace()
-    }
-
-    fn version(&self) -> &str {
-        self.inner.version()
-    }
-
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    fn method_help(&self, method: &str) -> Option<String> {
-        self.inner.method_help(method)
-    }
+    fn namespace(&self) -> &str { self.inner.namespace() }
+    fn version(&self) -> &str { self.inner.version() }
+    fn description(&self) -> &str { self.inner.description() }
+    fn methods(&self) -> Vec<&str> { self.inner.methods() }
+    fn method_help(&self, method: &str) -> Option<String> { self.inner.method_help(method) }
 
     async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
         self.inner.call(method, params).await
-    }
-
-    fn set_hub(&self, hub: Weak<Plexus>) {
-        self.inner.set_hub(hub)
     }
 
     async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
         self.inner.resolve_handle(handle).await
     }
 
-    fn into_rpc_methods(self) -> Methods {
-        self.inner.into_rpc_methods()
-    }
-
-    fn full_schema(&self) -> ActivationFullSchema {
-        self.inner.full_schema()
-    }
-}
-
-/// Implement CustomGuidance by delegating to inner Activation
-impl<A: Activation> CustomGuidance for ActivationWrapper<A> {
-    fn custom_guidance(&self, method: &str, error: &PlexusError) -> Option<GuidanceSuggestion> {
-        self.inner.custom_guidance(method, error)
-    }
-}
-
-/// Implement ActivationGuidanceInfo by delegating to inner Activation
-impl<A: Activation> ActivationGuidanceInfo for ActivationWrapper<A> {
-    fn methods(&self) -> Vec<&str> {
-        self.inner.methods()
-    }
+    fn full_schema(&self) -> ActivationFullSchema { self.inner.full_schema() }
 
     fn schema(&self) -> Schema {
-        // Automatically generate schema from A::Methods
         let schema = schemars::schema_for!(A::Methods);
-        serde_json::from_value(serde_json::to_value(schema).expect("Failed to serialize schema"))
-            .expect("Failed to parse schema - Methods type incorrectly defined")
+        serde_json::from_value(serde_json::to_value(schema).expect("serialize"))
+            .expect("parse schema")
     }
 }
 
-/// Internal trait-object-safe activation interface (no associated types)
-///
-/// This trait is implemented automatically by `ActivationWrapper` to enable
-/// storing activations as trait objects. Users should implement `Activation` instead.
-#[async_trait]
-trait ActivationObject: Send + Sync + ActivationGuidanceInfo + 'static {
-    fn namespace(&self) -> &str;
-    fn version(&self) -> &str;
-    fn description(&self) -> &str;
-    fn method_help(&self, method: &str) -> Option<String>;
-    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError>;
-    fn set_hub(&self, hub: Weak<Plexus>);
-    async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError>;
-    fn into_rpc_methods(self) -> Methods;
-    fn full_schema(&self) -> ActivationFullSchema;
+// ============================================================================
+// Plexus Event Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum HashEvent {
+    Hash { value: String },
 }
 
-/// The Plexus - routes calls to registered activations
-pub struct Plexus {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum ListActivationsEvent {
+    Activation {
+        namespace: String,
+        version: String,
+        description: String,
+        methods: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum SchemaEvent {
+    Schema {
+        activations: Vec<ActivationInfo>,
+        total_methods: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CallParams {
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+// ============================================================================
+// Plexus Method Enum
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum PlexusMethod {
+    Call(CallParams),
+    Hash,
+    ListActivations,
+    Schema,
+}
+
+impl PlexusMethod {
+    pub fn description(method: &str) -> Option<&'static str> {
+        match method {
+            "call" => Some("Route a call to a registered activation"),
+            "hash" => Some("Get plexus configuration hash"),
+            "list_activations" => Some("List all registered activations"),
+            "schema" => Some("Get full plexus schema"),
+            _ => None,
+        }
+    }
+}
+
+impl MethodEnumSchema for PlexusMethod {
+    fn method_names() -> &'static [&'static str] {
+        &["call", "hash", "list_activations", "schema"]
+    }
+
+    fn schema_with_consts() -> Value {
+        serde_json::to_value(schemars::schema_for!(PlexusMethod)).unwrap()
+    }
+}
+
+// ============================================================================
+// Plexus RPC Interface
+// ============================================================================
+
+#[rpc(server, namespace = "plexus")]
+pub trait PlexusRpc {
+    #[subscription(name = "call", unsubscribe = "unsubscribe_call", item = Value)]
+    async fn rpc_call(&self, method: String, params: Value) -> SubscriptionResult;
+
+    #[subscription(name = "hash", unsubscribe = "unsubscribe_hash", item = Value)]
+    async fn rpc_hash(&self) -> SubscriptionResult;
+
+    #[subscription(name = "list_activations", unsubscribe = "unsubscribe_list_activations", item = Value)]
+    async fn rpc_list_activations(&self) -> SubscriptionResult;
+
+    #[subscription(name = "schema", unsubscribe = "unsubscribe_schema", item = Value)]
+    async fn rpc_schema(&self) -> SubscriptionResult;
+}
+
+// ============================================================================
+// Plexus
+// ============================================================================
+
+struct PlexusInner {
     activations: HashMap<String, Arc<dyn ActivationObject>>,
-    /// Pending activations that haven't been converted to RPC yet
-    /// Wrapped in Mutex to make Plexus Sync (required for MCP HTTP transport)
     pending_rpc: std::sync::Mutex<Vec<Box<dyn FnOnce() -> Methods + Send>>>,
+}
+
+/// Plexus - the central hub that IS an activation and routes to other activations
+#[derive(Clone)]
+pub struct Plexus {
+    inner: Arc<PlexusInner>,
 }
 
 impl Plexus {
     pub fn new() -> Self {
         Self {
-            activations: HashMap::new(),
-            pending_rpc: std::sync::Mutex::new(Vec::new()),
+            inner: Arc::new(PlexusInner {
+                activations: HashMap::new(),
+                pending_rpc: std::sync::Mutex::new(Vec::new()),
+            }),
         }
     }
 
-    /// Register an activation with the plexus
-    ///
-    /// The activation is automatically wrapped to enable storage as a trait object
-    /// while preserving type-driven schema generation.
-    pub fn register<A: Activation>(mut self, activation: A) -> Self {
+    /// Register an activation
+    pub fn register<A: Activation + Clone>(mut self, activation: A) -> Self {
         let namespace = activation.namespace().to_string();
         let activation_for_rpc = activation.clone();
 
-        // Wrap the activation to make it trait-object safe
-        let wrapped = ActivationWrapper::new(activation);
-        self.activations.insert(namespace, Arc::new(wrapped));
-        self.pending_rpc
-            .lock()
-            .unwrap()
+        let inner = Arc::get_mut(&mut self.inner)
+            .expect("Cannot register: Plexus has multiple references");
+
+        inner.activations.insert(namespace, Arc::new(ActivationWrapper { inner: activation }));
+        inner.pending_rpc.lock().unwrap()
             .push(Box::new(move || activation_for_rpc.into_rpc_methods()));
         self
     }
 
-    /// List all registered activations and their methods
+    /// List all methods across all activations
     pub fn list_methods(&self) -> Vec<String> {
         let mut methods = Vec::new();
-        for (namespace, activation) in &self.activations {
-            for method in activation.methods() {
-                methods.push(format!("{}.{}", namespace, method));
+
+        // Include plexus's own methods
+        for m in Activation::methods(self) {
+            methods.push(format!("plexus.{}", m));
+        }
+
+        // Include registered activation methods
+        for (ns, act) in &self.inner.activations {
+            for m in act.methods() {
+                methods.push(format!("{}.{}", ns, m));
             }
         }
         methods.sort();
         methods
     }
 
-    /// List plexus-level methods (not activation methods)
-    pub fn list_plexus_methods(&self) -> Vec<&'static str> {
-        vec!["plexus_schema", "plexus_activation_schema", "plexus_full_schema", "plexus_hash"]
-    }
-
-    /// Compute a hash of all activations and their methods for cache invalidation
-    ///
-    /// The hash is computed from a deterministic string of all activation
-    /// namespaces, versions, and method names sorted alphabetically.
-    pub fn compute_hash(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        // Build deterministic string: "namespace:version:method1,method2,..."
-        let mut activation_strings: Vec<String> = self
-            .activations
-            .values()
-            .map(|a| {
-                let mut methods: Vec<&str> = a.methods();
-                methods.sort();
-                format!("{}:{}:{}", a.namespace(), a.version(), methods.join(","))
-            })
-            .collect();
-        activation_strings.sort();
-
-        let combined = activation_strings.join(";");
-
-        let mut hasher = DefaultHasher::new();
-        combined.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        // Return as hex string
-        format!("{:016x}", hash)
-    }
-
-    /// Get information about all registered activations
+    /// List all activations (including plexus itself)
     pub fn list_activations(&self) -> Vec<ActivationInfo> {
-        let mut activations: Vec<ActivationInfo> = self
-            .activations
-            .values()
-            .map(|a| ActivationInfo {
+        let mut activations = Vec::new();
+
+        // Include plexus itself
+        activations.push(ActivationInfo {
+            namespace: Activation::namespace(self).to_string(),
+            version: Activation::version(self).to_string(),
+            description: Activation::description(self).to_string(),
+            methods: Activation::methods(self).iter().map(|s| s.to_string()).collect(),
+        });
+
+        // Include registered activations
+        for a in self.inner.activations.values() {
+            activations.push(ActivationInfo {
                 namespace: a.namespace().to_string(),
                 version: a.version().to_string(),
                 description: a.description().to_string(),
                 methods: a.methods().iter().map(|s| s.to_string()).collect(),
-            })
-            .collect();
-        activations.sort_by(|a, b| a.namespace.cmp(&b.namespace));
+            });
+        }
+
         activations
     }
 
-    /// Get help for a specific method
-    pub fn get_method_help(&self, method: &str) -> Option<String> {
-        let (namespace, method_name) = self.parse_method(method).ok()?;
-        let activation = self.activations.get(namespace)?;
-        activation.method_help(method_name)
-    }
+    /// Compute hash for cache invalidation
+    pub fn compute_hash(&self) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
-    /// Get the schema for an activation
-    pub fn get_activation_schema(&self, namespace: &str) -> Option<Schema> {
-        let activation = self.activations.get(namespace)?;
-        Some(activation.schema())
-    }
+        let mut strings: Vec<String> = Vec::new();
 
-    /// Get full schemas for all registered activations including method param/return types
-    pub fn list_full_schemas(&self) -> Vec<ActivationFullSchema> {
-        let mut schemas: Vec<ActivationFullSchema> = self
-            .activations
-            .values()
-            .map(|a| a.full_schema())
-            .collect();
-        schemas.sort_by(|a, b| a.namespace.cmp(&b.namespace));
-        schemas
-    }
+        // Include plexus itself
+        strings.push(format!(
+            "{}:{}:{}",
+            Activation::namespace(self),
+            Activation::version(self),
+            Activation::methods(self).join(",")
+        ));
 
-    /// Call a method on an activation
-    ///
-    /// Method format: "namespace.method" (e.g., "bash.execute", "health.check")
-    ///
-    /// Note: This method always returns Ok(PlexusStream). Errors are returned as
-    /// stream events (Guidance → Error → Done) rather than Err results.
-    pub async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        let plexus_hash = self.compute_hash();
-        let provenance = Provenance::root("plexus");
-
-        // Parse method (format: "namespace.method")
-        let (namespace, method_name) = match self.parse_method(method) {
-            Ok(parts) => parts,
-            Err(error) => {
-                // Method parse error - return guidance stream
-                return Ok(error_stream_with_guidance::<dyn ActivationGuidanceInfo>(
-                    plexus_hash,
-                    provenance,
-                    error,
-                    None,
-                    None,
-                ));
-            }
-        };
-
-        // Find activation
-        let activation = match self.activations.get(namespace) {
-            Some(a) => a,
-            None => {
-                // Activation not found - return guidance stream
-                let error = PlexusError::ActivationNotFound(namespace.to_string());
-                return Ok(error_stream_with_guidance::<dyn ActivationGuidanceInfo>(
-                    plexus_hash,
-                    provenance,
-                    error,
-                    None,
-                    None,
-                ));
-            }
-        };
-
-        // Update provenance with activation namespace
-        let activation_provenance = provenance.extend(namespace.to_string());
-
-        // Call activation method
-        match activation.call(method_name, params).await {
-            Ok(stream) => Ok(stream),
-            Err(error) => {
-                // Method call error - return guidance stream with activation info
-                // ActivationObject implements ActivationGuidanceInfo, so we can cast it
-                let activation_clone = Arc::clone(activation);
-                Ok(error_stream_with_guidance(
-                    plexus_hash,
-                    activation_provenance,
-                    error,
-                    Some(&activation_clone),
-                    Some(method_name),
-                ))
-            }
+        // Include registered activations
+        for a in self.inner.activations.values() {
+            strings.push(format!("{}:{}:{}", a.namespace(), a.version(), a.methods().join(",")));
         }
+        strings.sort();
+
+        let mut hasher = DefaultHasher::new();
+        strings.join(";").hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
     }
 
-    /// Resolve a handle by dispatching to the appropriate activation
-    ///
-    /// Looks up the activation by `handle.source` and delegates to its `resolve_handle` method.
-    /// Activations that need hub access for resolving foreign handles should store the hub
-    /// reference via `set_hub` during construction.
-    pub async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
-        // Find activation by handle source
-        let activation = match self.activations.get(&handle.plugin) {
-            Some(a) => a,
-            None => {
-                return Err(PlexusError::ActivationNotFound(handle.plugin.clone()));
-            }
-        };
+    /// Route a call to the appropriate activation
+    pub async fn route(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
+        let (namespace, method_name) = self.parse_method(method)?;
 
-        // Delegate to activation's resolve_handle
-        // Activations use their stored hub reference (from set_hub) if they need hub access
+        // Handle plexus's own methods
+        if namespace == "plexus" {
+            return Activation::call(self, method_name, params).await;
+        }
+
+        let activation = self.inner.activations.get(namespace)
+            .ok_or_else(|| PlexusError::ActivationNotFound(namespace.to_string()))?;
+
+        activation.call(method_name, params).await
+    }
+
+    /// Resolve a handle
+    pub async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
+        let activation = self.inner.activations.get(&handle.plugin)
+            .ok_or_else(|| PlexusError::ActivationNotFound(handle.plugin.clone()))?;
         activation.resolve_handle(handle).await
     }
 
-    /// Convert the plexus into an RPC module for JSON-RPC server
-    ///
-    /// Consumes the plexus. Clone first if you need to keep programmatic access.
-    pub fn into_rpc_module(self) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
-        let mut module = RpcModule::new(());
-
-        // Add plexus-level methods
-        let plexus_schema = PlexusSchema {
-            activations: self.list_activations(),
-            total_methods: self.list_methods().len(),
-        };
-
-        // Compute hash for cache invalidation and initialize global context
-        let plexus_hash = self.compute_hash();
-        PlexusContext::init(plexus_hash.clone());
-
-        // plexus_hash subscription - returns hash for cache invalidation
-        let hash_for_hash_sub = plexus_hash.clone();
-        module.register_subscription(
-            "plexus_hash",
-            "plexus_hash",
-            "plexus_unsubscribe_hash",
-            move |_params, pending, _ctx, _ext| {
-                let hash = hash_for_hash_sub.clone();
-                async move {
-                    let sink = pending.accept().await?;
-                    let response = PlexusStreamItem::data(
-                        hash.clone(),
-                        Provenance::root("plexus"),
-                        "plexus.hash".to_string(),
-                        serde_json::json!({ "hash": hash }),
-                    );
-                    if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    Ok(())
-                }
-            },
-        )?;
-
-        // plexus_schema subscription - returns all activations and methods
-        let hash_for_schema = plexus_hash.clone();
-        module.register_subscription(
-            "plexus_schema",
-            "plexus_schema",
-            "plexus_unsubscribe_schema",
-            move |_params, pending, _ctx, _ext| {
-                let schema = plexus_schema.clone();
-                let hash = hash_for_schema.clone();
-                async move {
-                    let sink = pending.accept().await?;
-                    let response = PlexusStreamItem::data(
-                        hash.clone(),
-                        Provenance::root("plexus"),
-                        "plexus.schema".to_string(),
-                        serde_json::to_value(&schema).unwrap(),
-                    );
-                    if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    Ok(())
-                }
-            },
-        )?;
-
-        // plexus_activation_schema subscription - returns enriched schema for a specific activation
-        // Optional second parameter specifies a method to get schema for just that method
-        // Clone activations for the closure
-        let activations_for_schema: HashMap<String, Arc<dyn ActivationObject>> = self
-            .activations
-            .iter()
-            .map(|(k, v)| (k.clone(), Arc::clone(v)))
-            .collect();
-        let hash_for_activation_schema = plexus_hash.clone();
-
-        module.register_subscription(
-            "plexus_activation_schema",
-            "plexus_activation_schema",
-            "plexus_unsubscribe_activation_schema",
-            move |params, pending, _ctx, _ext| {
-                let activations = activations_for_schema.clone();
-                let hash = hash_for_activation_schema.clone();
-                async move {
-                    // Parse parameters: namespace (required), method (optional)
-                    let mut seq = params.sequence();
-                    let namespace: String = seq.next()?;
-                    let method: Option<String> = seq.optional_next()?;
-                    let sink = pending.accept().await?;
-
-                    if let Some(activation) = activations.get(&namespace) {
-                        let full_schema = activation.schema();
-
-                        // If method specified, extract just that method's schema
-                        let (schema_value, content_type) = if let Some(method_name) = method {
-                            if let Some(method_schema) = full_schema.get_method_schema(&method_name) {
-                                (
-                                    serde_json::to_value(&method_schema).unwrap(),
-                                    "plexus.method_schema".to_string(),
-                                )
-                            } else {
-                                // Method not found in schema
-                                let available = full_schema.list_methods();
-                                let error = PlexusStreamItem::error(
-                                    hash.clone(),
-                                    Provenance::root("plexus"),
-                                    format!(
-                                        "Method '{}' not found in activation '{}'. Available: {}",
-                                        method_name,
-                                        namespace,
-                                        available.join(", ")
-                                    ),
-                                    false,
-                                );
-                                if let Ok(raw_value) = serde_json::value::to_raw_value(&error) {
-                                    let _ = sink.send(raw_value).await;
-                                }
-                                let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                                if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                                return Ok(());
-                            }
-                        } else {
-                            (
-                                serde_json::to_value(&full_schema).unwrap(),
-                                "plexus.activation_schema".to_string(),
-                            )
-                        };
-
-                        let response = PlexusStreamItem::data(
-                            hash.clone(),
-                            Provenance::root("plexus"),
-                            content_type,
-                            schema_value,
-                        );
-                        if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    } else {
-                        let error = PlexusStreamItem::error(
-                            hash.clone(),
-                            Provenance::root("plexus"),
-                            format!("Activation not found: {}", namespace),
-                            false,
-                        );
-                        if let Ok(raw_value) = serde_json::value::to_raw_value(&error) {
-                            let _ = sink.send(raw_value).await;
-                        }
-                    }
-
-                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    Ok(())
-                }
-            },
-        )?;
-
-        // plexus_full_schema subscription - returns full schema with params and return types
-        let activations_for_full_schema: HashMap<String, Arc<dyn ActivationObject>> = self
-            .activations
-            .iter()
-            .map(|(k, v)| (k.clone(), Arc::clone(v)))
-            .collect();
-        let hash_for_full_schema = plexus_hash.clone();
-
-        module.register_subscription(
-            "plexus_full_schema",
-            "plexus_full_schema",
-            "plexus_unsubscribe_full_schema",
-            move |params, pending, _ctx, _ext| {
-                let activations = activations_for_full_schema.clone();
-                let hash = hash_for_full_schema.clone();
-                async move {
-                    let mut seq = params.sequence();
-                    let namespace: String = seq.next()?;
-                    let sink = pending.accept().await?;
-
-                    if let Some(activation) = activations.get(&namespace) {
-                        let full_schema = activation.full_schema();
-                        let response = PlexusStreamItem::data(
-                            hash.clone(),
-                            Provenance::root("plexus"),
-                            "plexus.full_schema".to_string(),
-                            serde_json::to_value(&full_schema).unwrap(),
-                        );
-                        if let Ok(raw_value) = serde_json::value::to_raw_value(&response) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    } else {
-                        let error = PlexusStreamItem::error(
-                            hash.clone(),
-                            Provenance::root("plexus"),
-                            format!("Activation not found: {}", namespace),
-                            false,
-                        );
-                        if let Ok(raw_value) = serde_json::value::to_raw_value(&error) {
-                            let _ = sink.send(raw_value).await;
-                        }
-                    }
-
-                    let done = PlexusStreamItem::done(hash, Provenance::root("plexus"));
-                    if let Ok(raw_value) = serde_json::value::to_raw_value(&done) {
-                        let _ = sink.send(raw_value).await;
-                    }
-                    Ok(())
-                }
-            },
-        )?;
-
-        // Merge activation methods (drain from mutex)
-        let pending = std::mem::take(&mut *self.pending_rpc.lock().unwrap());
-        for factory in pending {
-            module.merge(factory())?;
-        }
-        Ok(module)
+    /// Get activation schema
+    pub fn get_activation_schema(&self, namespace: &str) -> Option<Schema> {
+        self.inner.activations.get(namespace).map(|a| a.schema())
     }
 
-    /// Parse "namespace.method" into parts
+    /// Get full schemas for all activations (including plexus itself)
+    pub fn list_full_schemas(&self) -> Vec<ActivationFullSchema> {
+        let mut schemas = Vec::new();
+
+        // Include plexus itself
+        schemas.push(Activation::full_schema(self));
+
+        // Include registered activations
+        for a in self.inner.activations.values() {
+            schemas.push(a.full_schema());
+        }
+
+        schemas
+    }
+
+    /// Get help for a method
+    pub fn get_method_help(&self, method: &str) -> Option<String> {
+        let (namespace, method_name) = self.parse_method(method).ok()?;
+        let activation = self.inner.activations.get(namespace)?;
+        activation.method_help(method_name)
+    }
+
     fn parse_method<'a>(&self, method: &'a str) -> Result<(&'a str, &'a str), PlexusError> {
         let parts: Vec<&str> = method.splitn(2, '.').collect();
         if parts.len() != 2 {
-            return Err(PlexusError::MethodNotFound {
-                activation: method.to_string(),
-                method: String::new(),
-            });
+            return Err(PlexusError::InvalidParams(format!("Invalid method format: {}", method)));
         }
         Ok((parts[0], parts[1]))
+    }
+
+    fn error_stream(&self, message: String) -> PlexusStream {
+        let metadata = StreamMetadata::new(vec!["plexus".into()], self.compute_hash());
+        Box::pin(futures::stream::once(async move {
+            PlexusStreamItem::Error { metadata, message, code: None, recoverable: false }
+        }))
+    }
+
+    // Stream helpers
+    fn hash_stream(&self) -> Pin<Box<dyn Stream<Item = HashEvent> + Send + 'static>> {
+        let hash = self.compute_hash();
+        Box::pin(stream! { yield HashEvent::Hash { value: hash }; })
+    }
+
+    fn list_activations_stream(&self) -> Pin<Box<dyn Stream<Item = ListActivationsEvent> + Send + 'static>> {
+        let activations = self.list_activations();
+        Box::pin(stream! {
+            for a in activations {
+                yield ListActivationsEvent::Activation {
+                    namespace: a.namespace,
+                    version: a.version,
+                    description: a.description,
+                    methods: a.methods,
+                };
+            }
+        })
+    }
+
+    fn schema_stream(&self) -> Pin<Box<dyn Stream<Item = SchemaEvent> + Send + 'static>> {
+        let activations = self.list_activations();
+        let total = self.list_methods().len();
+        Box::pin(stream! {
+            yield SchemaEvent::Schema { activations, total_methods: total };
+        })
+    }
+
+    /// Convert to RPC module
+    pub fn into_rpc_module(self) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
+        let mut module = RpcModule::new(());
+
+        PlexusContext::init(self.compute_hash());
+
+        // Add plexus's own RPC methods
+        let plexus_methods: Methods = self.clone().into_rpc().into();
+        module.merge(plexus_methods)?;
+
+        // Add all registered activation RPC methods
+        let pending = std::mem::take(&mut *self.inner.pending_rpc.lock().unwrap());
+        for factory in pending {
+            module.merge(factory())?;
+        }
+
+        Ok(module)
     }
 }
 
 impl Default for Plexus {
-    fn default() -> Self {
-        Self::new()
+    fn default() -> Self { Self::new() }
+}
+
+// ============================================================================
+// Plexus RPC Implementation
+// ============================================================================
+
+#[async_trait]
+impl PlexusRpcServer for Plexus {
+    async fn rpc_call(&self, pending: PendingSubscriptionSink, method: String, params: Value) -> SubscriptionResult {
+        let sink = pending.accept().await?;
+        let stream_result = self.route(&method, params).await;
+
+        tokio::spawn(async move {
+            match stream_result {
+                Ok(mut stream) => {
+                    while let Some(item) = stream.next().await {
+                        if let Ok(raw) = serde_json::value::to_raw_value(&item) {
+                            if sink.send(raw).await.is_err() { break; }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error = PlexusStreamItem::Error {
+                        metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
+                        message: e.to_string(),
+                        code: None,
+                        recoverable: false,
+                    };
+                    if let Ok(raw) = serde_json::value::to_raw_value(&error) {
+                        let _ = sink.send(raw).await;
+                    }
+                }
+            }
+            let done = PlexusStreamItem::Done {
+                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
+            };
+            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
+                let _ = sink.send(raw).await;
+            }
+        });
+        Ok(())
+    }
+
+    async fn rpc_hash(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
+        let sink = pending.accept().await?;
+        let stream = self.hash_stream();
+        let wrapped = wrap_stream(stream, "plexus.hash", vec!["plexus".into()]);
+
+        tokio::spawn(async move {
+            let mut stream = wrapped;
+            while let Some(item) = stream.next().await {
+                if let Ok(raw) = serde_json::value::to_raw_value(&item) {
+                    if sink.send(raw).await.is_err() { break; }
+                }
+            }
+            let done = PlexusStreamItem::Done {
+                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
+            };
+            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
+                let _ = sink.send(raw).await;
+            }
+        });
+        Ok(())
+    }
+
+    async fn rpc_list_activations(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
+        let sink = pending.accept().await?;
+        let stream = self.list_activations_stream();
+        let wrapped = wrap_stream(stream, "plexus.list_activations", vec!["plexus".into()]);
+
+        tokio::spawn(async move {
+            let mut stream = wrapped;
+            while let Some(item) = stream.next().await {
+                if let Ok(raw) = serde_json::value::to_raw_value(&item) {
+                    if sink.send(raw).await.is_err() { break; }
+                }
+            }
+            let done = PlexusStreamItem::Done {
+                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
+            };
+            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
+                let _ = sink.send(raw).await;
+            }
+        });
+        Ok(())
+    }
+
+    async fn rpc_schema(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
+        let sink = pending.accept().await?;
+        let stream = self.schema_stream();
+        let wrapped = wrap_stream(stream, "plexus.schema", vec!["plexus".into()]);
+
+        tokio::spawn(async move {
+            let mut stream = wrapped;
+            while let Some(item) = stream.next().await {
+                if let Ok(raw) = serde_json::value::to_raw_value(&item) {
+                    if sink.send(raw).await.is_err() { break; }
+                }
+            }
+            let done = PlexusStreamItem::Done {
+                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
+            };
+            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
+                let _ = sink.send(raw).await;
+            }
+        });
+        Ok(())
     }
 }
 
-/// Helper to convert a typed stream to PlexusStream
-pub fn into_plexus_stream<S, T>(stream: S, provenance: Provenance) -> PlexusStream
-where
-    S: Stream<Item = T> + Send + 'static,
-    T: ActivationStreamItem,
-{
-    let plexus_hash = PlexusContext::hash();
-    Box::pin(stream.map(move |item| item.into_plexus_item(provenance.clone(), &plexus_hash)))
+// ============================================================================
+// Plexus as Activation
+// ============================================================================
+
+#[async_trait]
+impl Activation for Plexus {
+    type Methods = PlexusMethod;
+
+    fn namespace(&self) -> &str { "plexus" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Central routing and introspection" }
+
+    fn methods(&self) -> Vec<&str> {
+        vec!["call", "hash", "list_activations", "schema"]
+    }
+
+    fn method_help(&self, method: &str) -> Option<String> {
+        PlexusMethod::description(method).map(|s| s.to_string())
+    }
+
+    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
+        match method {
+            "call" => {
+                let p: CallParams = serde_json::from_value(params)
+                    .map_err(|e| PlexusError::InvalidParams(e.to_string()))?;
+                self.route(&p.method, p.params).await
+            }
+            "hash" => Ok(wrap_stream(self.hash_stream(), "plexus.hash", vec!["plexus".into()])),
+            "list_activations" => Ok(wrap_stream(self.list_activations_stream(), "plexus.list_activations", vec!["plexus".into()])),
+            "schema" => Ok(wrap_stream(self.schema_stream(), "plexus.schema", vec!["plexus".into()])),
+            _ => Err(PlexusError::MethodNotFound {
+                activation: "plexus".to_string(),
+                method: method.to_string(),
+            }),
+        }
+    }
+
+    fn into_rpc_methods(self) -> Methods {
+        self.into_rpc().into()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plexus::types::GuidanceSuggestion;
 
     #[test]
-    fn test_custom_guidance_contract() {
-        // Create test activation
-        #[derive(Clone)]
-        struct TestActivation;
-
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        enum TestMethod {}
-
-        impl MethodEnumSchema for TestMethod {
-            fn method_names() -> &'static [&'static str] { &[] }
-            fn schema_with_consts() -> Value { Value::Null }
-        }
-
-        #[async_trait]
-        impl Activation for TestActivation {
-            type Methods = TestMethod;
-
-            fn namespace(&self) -> &str {
-                "test"
-            }
-            fn version(&self) -> &str {
-                "1.0.0"
-            }
-            fn methods(&self) -> Vec<&str> {
-                vec![]
-            }
-            async fn call(&self, _: &str, _: Value) -> Result<PlexusStream, PlexusError> {
-                Err(PlexusError::MethodNotFound {
-                    activation: "test".to_string(),
-                    method: "unknown".to_string(),
-                })
-            }
-            fn into_rpc_methods(self) -> Methods {
-                Methods::new()
-            }
-
-            // Override custom_guidance
-            fn custom_guidance(
-                &self,
-                method: &str,
-                _error: &PlexusError,
-            ) -> Option<GuidanceSuggestion> {
-                if method == "test" {
-                    Some(GuidanceSuggestion::Custom {
-                        message: "custom".to_string(),
-                    })
-                } else {
-                    None
-                }
-            }
-        }
-
-        let activation = TestActivation;
-        let error = PlexusError::InvalidParams("test".to_string());
-
-        // Contract: Method returns Some for specific cases, None otherwise
-        assert!(activation.custom_guidance("test", &error).is_some());
-        assert!(activation.custom_guidance("other", &error).is_none());
+    fn plexus_implements_activation() {
+        fn assert_activation<T: Activation>() {}
+        assert_activation::<Plexus>();
     }
 
     #[test]
-    fn test_default_custom_guidance_returns_none() {
-        // Verify default implementation returns None
-        #[derive(Clone)]
-        struct MinimalActivation;
-
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        enum MinimalMethod {}
-
-        impl MethodEnumSchema for MinimalMethod {
-            fn method_names() -> &'static [&'static str] { &[] }
-            fn schema_with_consts() -> Value { Value::Null }
-        }
-
-        #[async_trait]
-        impl Activation for MinimalActivation {
-            type Methods = MinimalMethod;
-
-            fn namespace(&self) -> &str {
-                "minimal"
-            }
-            fn version(&self) -> &str {
-                "1.0.0"
-            }
-            fn methods(&self) -> Vec<&str> {
-                vec![]
-            }
-            async fn call(&self, _: &str, _: Value) -> Result<PlexusStream, PlexusError> {
-                Err(PlexusError::MethodNotFound {
-                    activation: "minimal".to_string(),
-                    method: "unknown".to_string(),
-                })
-            }
-            fn into_rpc_methods(self) -> Methods {
-                Methods::new()
-            }
-            // Don't override custom_guidance - use default
-        }
-
-        let activation = MinimalActivation;
-        let error = PlexusError::InvalidParams("test".to_string());
-
-        // Default implementation should return None
-        assert!(activation.custom_guidance("any_method", &error).is_none());
+    fn plexus_methods() {
+        let plexus = Plexus::new();
+        let methods = plexus.methods();
+        assert!(methods.contains(&"call"));
+        assert!(methods.contains(&"hash"));
+        assert!(methods.contains(&"list_activations"));
+        assert!(methods.contains(&"schema"));
     }
 
-    #[tokio::test]
-    async fn test_plexus_call_behavior_contract() {
-        use futures::StreamExt;
-
-        // Create a minimal plexus (no activations)
-        let plexus = Plexus::new();
-
-        // Contract: call() always returns Ok, never Err
-        let result = plexus.call("foo.bar", serde_json::json!({})).await;
-        assert!(result.is_ok(), "call() must always return Ok(stream)");
-
-        // Contract: Error case yields stream with events
-        let stream = result.unwrap();
-        let items: Vec<_> = stream.collect().await;
-        assert!(!items.is_empty(), "Error stream must yield events");
-
-        // Should have Guidance event (for ActivationNotFound)
-        assert_eq!(items.len(), 3, "Should yield Guidance → Error → Done");
-    }
-
-    #[tokio::test]
-    async fn test_plexus_call_returns_guidance_for_activation_not_found() {
-        use crate::plexus::types::PlexusStreamEvent;
-        use futures::StreamExt;
-
-        let plexus = Plexus::new();
-
-        let stream = plexus
-            .call("nonexistent.method", serde_json::json!({}))
-            .await
-            .unwrap();
-        let items: Vec<_> = stream.collect().await;
-
-        // First event should be Guidance
-        match &items[0].event {
-            PlexusStreamEvent::Guidance {
-                error_type,
-                suggestion,
-                ..
-            } => {
-                // Should indicate activation not found
-                assert!(
-                    matches!(
-                        error_type,
-                        crate::plexus::types::GuidanceErrorType::ActivationNotFound { .. }
-                    ),
-                    "Should be ActivationNotFound error"
-                );
-                // Should suggest calling plexus_schema
-                assert!(
-                    matches!(
-                        suggestion,
-                        crate::plexus::types::GuidanceSuggestion::CallPlexusSchema
-                    ),
-                    "Should suggest CallPlexusSchema"
-                );
-            }
-            _ => panic!("First event should be Guidance"),
-        }
+    #[test]
+    fn plexus_hash_stable() {
+        let p1 = Plexus::new();
+        let p2 = Plexus::new();
+        assert_eq!(p1.compute_hash(), p2.compute_hash());
     }
 }
