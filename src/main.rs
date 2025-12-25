@@ -1,11 +1,10 @@
-use substrate::{
-    build_plexus,
-    builder::substrate_data_dir,
-    mcp::{McpInterface, transport::mcp_router},
-};
+use substrate::{build_plexus, PlexusMcpBridge};
 use jsonrpsee::server::{Server, ServerHandle};
 use jsonrpsee::RpcModule;
 use clap::Parser;
+use rmcp::transport::streamable_http_server::{
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -27,7 +26,6 @@ struct Args {
 /// Serve RPC module over stdio (MCP-compatible transport)
 async fn serve_stdio(module: RpcModule<()>) -> anyhow::Result<()> {
     tracing::info!("Substrate plexus started in stdio mode (MCP-compatible)");
-    tracing::info!("Data directory: {}", substrate_data_dir().display());
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
@@ -128,11 +126,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::debug!("  ├─ debug :: introspection enabled");
     tracing::trace!("  └─ trace :: full observability unlocked");
 
-    // Build plexus with all activations (returns Arc<Plexus>)
-    let plexus = build_plexus().await;
+    // Build plexus (returns Arc<Plexus>)
+    let plexus = build_plexus();
     let activations = plexus.list_activations();
     let methods = plexus.list_methods();
-    let plexus_methods = plexus.list_plexus_methods();
     let plexus_hash = plexus.compute_hash();
 
     // Convert plexus to RPC module for JSON-RPC server (consumes plexus)
@@ -158,10 +155,21 @@ async fn main() -> anyhow::Result<()> {
         let ws_handle: ServerHandle = ws_server.start(module);
 
         // Build MCP interface with a fresh Plexus (since module consumed the first one)
-        // build_plexus already returns Arc<Plexus>
-        let mcp_plexus = build_plexus().await;
-        let mcp_interface = Arc::new(McpInterface::new(mcp_plexus));
-        let mcp_app = mcp_router(mcp_interface);
+        let mcp_plexus = build_plexus();
+        let mcp_bridge = PlexusMcpBridge::new(mcp_plexus);
+
+        // Create StreamableHttpService for MCP
+        let config = StreamableHttpServerConfig::default();
+        let session_manager = LocalSessionManager::default().into();
+        let bridge_clone = mcp_bridge.clone();
+        let mcp_service = StreamableHttpService::new(
+            move || Ok(bridge_clone.clone()),
+            session_manager,
+            config,
+        );
+
+        // Build axum router with MCP at /mcp
+        let mcp_app = axum::Router::new().nest_service("/mcp", mcp_service);
 
         // Start MCP HTTP server
         let mcp_listener = tokio::net::TcpListener::bind(mcp_addr).await?;
@@ -172,13 +180,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Substrate plexus started");
         tracing::info!("  WebSocket: ws://{}", ws_addr);
         tracing::info!("  MCP HTTP:  http://{}/mcp", mcp_addr);
-        tracing::info!("Data directory: {}", substrate_data_dir().display());
         tracing::info!("Plexus hash: {}", plexus_hash);
-        tracing::info!("");
-        tracing::info!("Plexus methods ({}):", plexus_methods.len());
-        for method in &plexus_methods {
-            tracing::info!("  - {}", method);
-        }
         tracing::info!("");
         tracing::info!("Activations ({}):", activations.len());
         for activation in &activations {
@@ -192,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         tracing::info!("");
-        tracing::info!("Total methods: {} (+{} plexus)", methods.len(), plexus_methods.len());
+        tracing::info!("Total methods: {}", methods.len());
 
         // Wait for either server to stop
         tokio::select! {

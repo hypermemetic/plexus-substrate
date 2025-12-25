@@ -1,35 +1,19 @@
-use crate::{
-    plexus::{Provenance, types::PlexusStreamItem},
-    plugin_system::types::ActivationStreamItem,
-};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Stream events from health check
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+///
+/// This is a plain domain type - no trait implementations needed.
+/// The caller (Plexus) wraps this with metadata when streaming.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", rename_all = "snake_case")]
 pub enum HealthEvent {
     /// Current health status
-    #[serde(rename = "status")]
     Status {
         status: String,
         uptime_seconds: u64,
         timestamp: i64,
     },
-}
-
-impl ActivationStreamItem for HealthEvent {
-    fn content_type() -> &'static str {
-        "health.event"
-    }
-
-    fn into_plexus_item(self, provenance: Provenance, plexus_hash: &str) -> PlexusStreamItem {
-        PlexusStreamItem::data(
-            plexus_hash.to_string(),
-            provenance,
-            Self::content_type().to_string(),
-            serde_json::to_value(self).unwrap(),
-        )
-    }
 }
 
 // Keep old name for backwards compatibility
