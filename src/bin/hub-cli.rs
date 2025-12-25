@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         }
         "activations" => {
             println!("Registered activations:");
-            for activation_info in plexus.list_activations() {
+            for activation_info in plexus.list_activations_info() {
                 println!("\n  {} (v{})", activation_info.namespace, activation_info.version);
                 println!("    {}", activation_info.description);
                 println!("    Methods: {}", activation_info.methods.join(", "));
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
             if args.len() < 3 {
                 println!("Usage: substrate-cli schema <namespace>");
                 println!("\nAvailable namespaces:");
-                for activation_info in plexus.list_activations() {
+                for activation_info in plexus.list_activations_info() {
                     println!("  {}", activation_info.namespace);
                 }
                 return Ok(());
