@@ -1,7 +1,7 @@
 //! Plexus - the central routing layer for activations
 //!
 //! Plexus IS an activation that also serves as the registry for other activations.
-//! It implements the "caller-wraps" streaming architecture.
+//! It uses hub-macro with `override_call` for the routing method.
 
 use super::{
     context::PlexusContext,
@@ -14,13 +14,13 @@ use crate::types::Handle;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use jsonrpsee::core::{server::Methods, SubscriptionResult};
-use jsonrpsee::{proc_macros::rpc, PendingSubscriptionSink, RpcModule};
+use jsonrpsee::core::server::Methods;
+use jsonrpsee::RpcModule;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::pin::Pin;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 // ============================================================================
@@ -198,67 +198,6 @@ pub enum SchemaEvent {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CallParams {
-    pub method: String,
-    #[serde(default)]
-    pub params: Value,
-}
-
-// ============================================================================
-// Plexus Method Enum
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "method", rename_all = "snake_case")]
-pub enum PlexusMethod {
-    Call(CallParams),
-    Hash,
-    ListActivations,
-    Schema,
-}
-
-impl PlexusMethod {
-    pub fn description(method: &str) -> Option<&'static str> {
-        match method {
-            "call" => Some("Route a call to a registered activation"),
-            "hash" => Some("Get plexus configuration hash"),
-            "list_activations" => Some("List all registered activations"),
-            "schema" => Some("Get full plexus schema"),
-            _ => None,
-        }
-    }
-}
-
-impl MethodEnumSchema for PlexusMethod {
-    fn method_names() -> &'static [&'static str] {
-        &["call", "hash", "list_activations", "schema"]
-    }
-
-    fn schema_with_consts() -> Value {
-        serde_json::to_value(schemars::schema_for!(PlexusMethod)).unwrap()
-    }
-}
-
-// ============================================================================
-// Plexus RPC Interface
-// ============================================================================
-
-#[rpc(server, namespace = "plexus")]
-pub trait PlexusRpc {
-    #[subscription(name = "call", unsubscribe = "unsubscribe_call", item = Value)]
-    async fn rpc_call(&self, method: String, params: Value) -> SubscriptionResult;
-
-    #[subscription(name = "hash", unsubscribe = "unsubscribe_hash", item = Value)]
-    async fn rpc_hash(&self) -> SubscriptionResult;
-
-    #[subscription(name = "list_activations", unsubscribe = "unsubscribe_list_activations", item = Value)]
-    async fn rpc_list_activations(&self) -> SubscriptionResult;
-
-    #[subscription(name = "schema", unsubscribe = "unsubscribe_schema", item = Value)]
-    async fn rpc_schema(&self) -> SubscriptionResult;
-}
-
 // ============================================================================
 // Plexus
 // ============================================================================
@@ -273,6 +212,14 @@ struct PlexusInner {
 pub struct Plexus {
     inner: Arc<PlexusInner>,
 }
+
+impl Default for Plexus {
+    fn default() -> Self { Self::new() }
+}
+
+// ============================================================================
+// Plexus Infrastructure (non-RPC methods)
+// ============================================================================
 
 impl Plexus {
     pub fn new() -> Self {
@@ -318,7 +265,7 @@ impl Plexus {
     }
 
     /// List all activations (including plexus itself)
-    pub fn list_activations(&self) -> Vec<ActivationInfo> {
+    pub fn list_activations_info(&self) -> Vec<ActivationInfo> {
         let mut activations = Vec::new();
 
         // Include plexus itself
@@ -384,7 +331,7 @@ impl Plexus {
     }
 
     /// Resolve a handle
-    pub async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
+    pub async fn do_resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
         let activation = self.inner.activations.get(&handle.plugin)
             .ok_or_else(|| PlexusError::ActivationNotFound(handle.plugin.clone()))?;
         activation.resolve_handle(handle).await
@@ -425,41 +372,6 @@ impl Plexus {
         Ok((parts[0], parts[1]))
     }
 
-    fn error_stream(&self, message: String) -> PlexusStream {
-        let metadata = StreamMetadata::new(vec!["plexus".into()], self.compute_hash());
-        Box::pin(futures::stream::once(async move {
-            PlexusStreamItem::Error { metadata, message, code: None, recoverable: false }
-        }))
-    }
-
-    // Stream helpers
-    fn hash_stream(&self) -> Pin<Box<dyn Stream<Item = HashEvent> + Send + 'static>> {
-        let hash = self.compute_hash();
-        Box::pin(stream! { yield HashEvent::Hash { value: hash }; })
-    }
-
-    fn list_activations_stream(&self) -> Pin<Box<dyn Stream<Item = ListActivationsEvent> + Send + 'static>> {
-        let activations = self.list_activations();
-        Box::pin(stream! {
-            for a in activations {
-                yield ListActivationsEvent::Activation {
-                    namespace: a.namespace,
-                    version: a.version,
-                    description: a.description,
-                    methods: a.methods,
-                };
-            }
-        })
-    }
-
-    fn schema_stream(&self) -> Pin<Box<dyn Stream<Item = SchemaEvent> + Send + 'static>> {
-        let activations = self.list_activations();
-        let total = self.list_methods().len();
-        Box::pin(stream! {
-            yield SchemaEvent::Schema { activations, total_methods: total };
-        })
-    }
-
     /// Convert to RPC module
     pub fn into_rpc_module(self) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
         let mut module = RpcModule::new(());
@@ -480,157 +392,64 @@ impl Plexus {
     }
 }
 
-impl Default for Plexus {
-    fn default() -> Self { Self::new() }
-}
-
 // ============================================================================
-// Plexus RPC Implementation
+// Plexus RPC Methods (via hub-macro)
 // ============================================================================
 
-#[async_trait]
-impl PlexusRpcServer for Plexus {
-    async fn rpc_call(&self, pending: PendingSubscriptionSink, method: String, params: Value) -> SubscriptionResult {
-        let sink = pending.accept().await?;
-        let stream_result = self.route(&method, params).await;
-
-        tokio::spawn(async move {
-            match stream_result {
-                Ok(mut stream) => {
-                    while let Some(item) = stream.next().await {
-                        if let Ok(raw) = serde_json::value::to_raw_value(&item) {
-                            if sink.send(raw).await.is_err() { break; }
-                        }
-                    }
-                }
-                Err(e) => {
-                    let error = PlexusStreamItem::Error {
-                        metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
-                        message: e.to_string(),
-                        code: None,
-                        recoverable: false,
-                    };
-                    if let Ok(raw) = serde_json::value::to_raw_value(&error) {
-                        let _ = sink.send(raw).await;
-                    }
-                }
-            }
-            let done = PlexusStreamItem::Done {
-                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
-            };
-            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
-                let _ = sink.send(raw).await;
-            }
-        });
-        Ok(())
+#[hub_macro::hub_methods(
+    namespace = "plexus",
+    version = "1.0.0",
+    description = "Central routing and introspection"
+)]
+impl Plexus {
+    /// Route a call to a registered activation
+    #[hub_macro::hub_method(
+        override_call,
+        description = "Route a call to a registered activation",
+        params(
+            method = "The method to call (format: namespace.method)",
+            params = "Parameters to pass to the method"
+        )
+    )]
+    async fn call(
+        &self,
+        method: String,
+        params: Value,
+    ) -> Result<PlexusStream, PlexusError> {
+        self.route(&method, params).await
     }
 
-    async fn rpc_hash(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let sink = pending.accept().await?;
-        let stream = self.hash_stream();
-        let wrapped = wrap_stream(stream, "plexus.hash", vec!["plexus".into()]);
-
-        tokio::spawn(async move {
-            let mut stream = wrapped;
-            while let Some(item) = stream.next().await {
-                if let Ok(raw) = serde_json::value::to_raw_value(&item) {
-                    if sink.send(raw).await.is_err() { break; }
-                }
-            }
-            let done = PlexusStreamItem::Done {
-                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
-            };
-            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
-                let _ = sink.send(raw).await;
-            }
-        });
-        Ok(())
+    /// Get plexus configuration hash
+    #[hub_macro::hub_method(description = "Get plexus configuration hash")]
+    async fn hash(&self) -> impl Stream<Item = HashEvent> + Send + 'static {
+        let hash = self.compute_hash();
+        stream! { yield HashEvent::Hash { value: hash }; }
     }
 
-    async fn rpc_list_activations(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let sink = pending.accept().await?;
-        let stream = self.list_activations_stream();
-        let wrapped = wrap_stream(stream, "plexus.list_activations", vec!["plexus".into()]);
-
-        tokio::spawn(async move {
-            let mut stream = wrapped;
-            while let Some(item) = stream.next().await {
-                if let Ok(raw) = serde_json::value::to_raw_value(&item) {
-                    if sink.send(raw).await.is_err() { break; }
-                }
+    /// List all registered activations
+    #[hub_macro::hub_method(description = "List all registered activations")]
+    async fn list_activations(&self) -> impl Stream<Item = ListActivationsEvent> + Send + 'static {
+        let activations = self.list_activations_info();
+        stream! {
+            for a in activations {
+                yield ListActivationsEvent::Activation {
+                    namespace: a.namespace,
+                    version: a.version,
+                    description: a.description,
+                    methods: a.methods,
+                };
             }
-            let done = PlexusStreamItem::Done {
-                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
-            };
-            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
-                let _ = sink.send(raw).await;
-            }
-        });
-        Ok(())
-    }
-
-    async fn rpc_schema(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-        let sink = pending.accept().await?;
-        let stream = self.schema_stream();
-        let wrapped = wrap_stream(stream, "plexus.schema", vec!["plexus".into()]);
-
-        tokio::spawn(async move {
-            let mut stream = wrapped;
-            while let Some(item) = stream.next().await {
-                if let Ok(raw) = serde_json::value::to_raw_value(&item) {
-                    if sink.send(raw).await.is_err() { break; }
-                }
-            }
-            let done = PlexusStreamItem::Done {
-                metadata: StreamMetadata::new(vec!["plexus".into()], PlexusContext::hash()),
-            };
-            if let Ok(raw) = serde_json::value::to_raw_value(&done) {
-                let _ = sink.send(raw).await;
-            }
-        });
-        Ok(())
-    }
-}
-
-// ============================================================================
-// Plexus as Activation
-// ============================================================================
-
-#[async_trait]
-impl Activation for Plexus {
-    type Methods = PlexusMethod;
-
-    fn namespace(&self) -> &str { "plexus" }
-    fn version(&self) -> &str { "1.0.0" }
-    fn description(&self) -> &str { "Central routing and introspection" }
-
-    fn methods(&self) -> Vec<&str> {
-        vec!["call", "hash", "list_activations", "schema"]
-    }
-
-    fn method_help(&self, method: &str) -> Option<String> {
-        PlexusMethod::description(method).map(|s| s.to_string())
-    }
-
-    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        match method {
-            "call" => {
-                let p: CallParams = serde_json::from_value(params)
-                    .map_err(|e| PlexusError::InvalidParams(e.to_string()))?;
-                self.route(&p.method, p.params).await
-            }
-            "hash" => Ok(wrap_stream(self.hash_stream(), "plexus.hash", vec!["plexus".into()])),
-            "list_activations" => Ok(wrap_stream(self.list_activations_stream(), "plexus.list_activations", vec!["plexus".into()])),
-            "schema" => Ok(wrap_stream(self.schema_stream(), "plexus.schema", vec!["plexus".into()])),
-            _ => Err(PlexusError::MethodNotFound {
-                activation: "plexus".to_string(),
-                method: method.to_string(),
-            }),
         }
     }
 
-    fn into_rpc_methods(self) -> Methods {
-        self.into_rpc().into()
+    /// Get full plexus schema
+    #[hub_macro::hub_method(description = "Get full plexus schema")]
+    async fn schema(&self) -> impl Stream<Item = SchemaEvent> + Send + 'static {
+        let activations = self.list_activations_info();
+        let total = self.list_methods().len();
+        stream! {
+            yield SchemaEvent::Schema { activations, total_methods: total };
+        }
     }
 }
 
