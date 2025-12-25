@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build plexus (returns Arc<Plexus>)
     let plexus = build_plexus();
-    let activations = plexus.list_activations();
+    let activations = plexus.list_activations_info();
     let methods = plexus.list_methods();
     let plexus_hash = plexus.compute_hash();
 

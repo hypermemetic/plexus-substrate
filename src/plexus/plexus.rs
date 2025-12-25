@@ -7,20 +7,18 @@ use super::{
     context::PlexusContext,
     method_enum::MethodEnumSchema,
     schema::Schema,
-    streaming::{wrap_stream, PlexusStream},
-    types::{PlexusStreamItem, StreamMetadata},
+    streaming::PlexusStream,
 };
 use crate::types::Handle;
 use async_stream::stream;
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use jsonrpsee::core::server::Methods;
 use jsonrpsee::RpcModule;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 
 // ============================================================================
