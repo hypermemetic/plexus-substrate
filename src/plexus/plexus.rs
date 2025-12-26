@@ -91,12 +91,21 @@ pub trait Activation: Send + Sync + 'static {
 
     /// Return this plugin's schema (methods + optional children)
     fn plugin_schema(&self) -> PluginSchema {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
         PluginSchema::leaf(
             self.namespace(),
             self.version(),
             self.description(),
             self.methods().iter().map(|name| {
-                MethodSchema::new(name.to_string(), self.method_help(name).unwrap_or_default())
+                let desc = self.method_help(name).unwrap_or_default();
+                // Compute a simple hash for methods not using hub-macro
+                let mut hasher = DefaultHasher::new();
+                name.hash(&mut hasher);
+                desc.hash(&mut hasher);
+                let hash = format!("{:016x}", hasher.finish());
+                MethodSchema::new(name.to_string(), desc, hash)
             }).collect(),
         )
     }
@@ -156,17 +165,6 @@ impl<A: Activation> ActivationObject for ActivationWrapper<A> {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum HashEvent {
     Hash { value: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum ListActivationsEvent {
-    Activation {
-        namespace: String,
-        version: String,
-        description: String,
-        methods: Vec<String>,
-    },
 }
 
 /// Event for schema() RPC method - returns recursive plugin schema
@@ -269,29 +267,11 @@ impl Plexus {
     }
 
     /// Compute hash for cache invalidation
+    ///
+    /// Returns the hash from the recursive plugin schema. This hash changes
+    /// whenever any method definition or child plugin changes.
     pub fn compute_hash(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut strings: Vec<String> = Vec::new();
-
-        // Include plexus itself
-        strings.push(format!(
-            "{}:{}:{}",
-            Activation::namespace(self),
-            Activation::version(self),
-            Activation::methods(self).join(",")
-        ));
-
-        // Include registered activations
-        for a in self.inner.activations.values() {
-            strings.push(format!("{}:{}:{}", a.namespace(), a.version(), a.methods().join(",")));
-        }
-        strings.sort();
-
-        let mut hasher = DefaultHasher::new();
-        strings.join(";").hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        Activation::plugin_schema(self).hash
     }
 
     /// Route a call to the appropriate activation
@@ -413,27 +393,15 @@ impl Plexus {
         self.route(&method, params).await
     }
 
-    /// Get plexus configuration hash
+    /// Get plexus configuration hash (from the recursive schema)
+    ///
+    /// This hash changes whenever any method or child plugin changes.
+    /// It's computed from the method hashes rolled up through the schema tree.
     #[hub_macro::hub_method(description = "Get plexus configuration hash")]
     async fn hash(&self) -> impl Stream<Item = HashEvent> + Send + 'static {
-        let hash = self.compute_hash();
-        stream! { yield HashEvent::Hash { value: hash }; }
-    }
-
-    /// List all registered activations
-    #[hub_macro::hub_method(description = "List all registered activations")]
-    async fn list_activations(&self) -> impl Stream<Item = ListActivationsEvent> + Send + 'static {
-        let activations = self.list_activations_info();
-        stream! {
-            for a in activations {
-                yield ListActivationsEvent::Activation {
-                    namespace: a.namespace,
-                    version: a.version,
-                    description: a.description,
-                    methods: a.methods,
-                };
-            }
-        }
+        // Get hash from the schema itself (recursive hash of all methods + children)
+        let schema = Activation::plugin_schema(self);
+        stream! { yield HashEvent::Hash { value: schema.hash }; }
     }
 
     /// Get full plexus schema (recursive, includes all children)
@@ -462,8 +430,8 @@ mod tests {
         let methods = plexus.methods();
         assert!(methods.contains(&"call"));
         assert!(methods.contains(&"hash"));
-        assert!(methods.contains(&"list_activations"));
         assert!(methods.contains(&"schema"));
+        // list_activations was removed - use schema() instead
     }
 
     #[test]
