@@ -6,7 +6,7 @@
 use super::{
     context::PlexusContext,
     method_enum::MethodEnumSchema,
-    schema::Schema,
+    schema::{MethodSchema, PluginSchema, Schema},
     streaming::PlexusStream,
 };
 use crate::types::Handle;
@@ -64,23 +64,9 @@ pub struct ActivationInfo {
     pub methods: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MethodSchemaInfo {
-    pub name: String,
-    pub description: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<schemars::Schema>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub returns: Option<schemars::Schema>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivationFullSchema {
-    pub namespace: String,
-    pub version: String,
-    pub description: String,
-    pub methods: Vec<MethodSchemaInfo>,
-}
+/// Full schema for an activation (deprecated - use PluginSchema)
+#[deprecated(note = "Use PluginSchema instead")]
+pub type ActivationFullSchema = PluginSchema;
 
 // ============================================================================
 // Activation Trait
@@ -103,20 +89,25 @@ pub trait Activation: Send + Sync + 'static {
 
     fn into_rpc_methods(self) -> Methods where Self: Sized;
 
-    fn full_schema(&self) -> ActivationFullSchema {
-        ActivationFullSchema {
-            namespace: self.namespace().to_string(),
-            version: self.version().to_string(),
-            description: self.description().to_string(),
-            methods: self.methods().iter().map(|name| {
-                MethodSchemaInfo {
-                    name: name.to_string(),
-                    description: self.method_help(name).unwrap_or_default(),
-                    params: None,
-                    returns: None,
-                }
+    /// Return this plugin's schema (methods + optional children)
+    fn plugin_schema(&self) -> PluginSchema {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        PluginSchema::leaf(
+            self.namespace(),
+            self.version(),
+            self.description(),
+            self.methods().iter().map(|name| {
+                let desc = self.method_help(name).unwrap_or_default();
+                // Compute a simple hash for methods not using hub-macro
+                let mut hasher = DefaultHasher::new();
+                name.hash(&mut hasher);
+                desc.hash(&mut hasher);
+                let hash = format!("{:016x}", hasher.finish());
+                MethodSchema::new(name.to_string(), desc, hash)
             }).collect(),
-        }
+        )
     }
 }
 
@@ -133,7 +124,7 @@ trait ActivationObject: Send + Sync + 'static {
     fn method_help(&self, method: &str) -> Option<String>;
     async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError>;
     async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError>;
-    fn full_schema(&self) -> ActivationFullSchema;
+    fn plugin_schema(&self) -> PluginSchema;
     fn schema(&self) -> Schema;
 }
 
@@ -157,7 +148,7 @@ impl<A: Activation> ActivationObject for ActivationWrapper<A> {
         self.inner.resolve_handle(handle).await
     }
 
-    fn full_schema(&self) -> ActivationFullSchema { self.inner.full_schema() }
+    fn plugin_schema(&self) -> PluginSchema { self.inner.plugin_schema() }
 
     fn schema(&self) -> Schema {
         let schema = schemars::schema_for!(A::Methods);
@@ -176,24 +167,12 @@ pub enum HashEvent {
     Hash { value: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum ListActivationsEvent {
-    Activation {
-        namespace: String,
-        version: String,
-        description: String,
-        methods: Vec<String>,
-    },
-}
-
+/// Event for schema() RPC method - returns recursive plugin schema
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SchemaEvent {
-    Schema {
-        activations: Vec<ActivationInfo>,
-        total_methods: usize,
-    },
+    /// The complete recursive schema with all plugins
+    Schema(PluginSchema),
 }
 
 // ============================================================================
@@ -288,29 +267,11 @@ impl Plexus {
     }
 
     /// Compute hash for cache invalidation
+    ///
+    /// Returns the hash from the recursive plugin schema. This hash changes
+    /// whenever any method definition or child plugin changes.
     pub fn compute_hash(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut strings: Vec<String> = Vec::new();
-
-        // Include plexus itself
-        strings.push(format!(
-            "{}:{}:{}",
-            Activation::namespace(self),
-            Activation::version(self),
-            Activation::methods(self).join(",")
-        ));
-
-        // Include registered activations
-        for a in self.inner.activations.values() {
-            strings.push(format!("{}:{}:{}", a.namespace(), a.version(), a.methods().join(",")));
-        }
-        strings.sort();
-
-        let mut hasher = DefaultHasher::new();
-        strings.join(";").hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        Activation::plugin_schema(self).hash
     }
 
     /// Route a call to the appropriate activation
@@ -340,19 +301,25 @@ impl Plexus {
         self.inner.activations.get(namespace).map(|a| a.schema())
     }
 
-    /// Get full schemas for all activations (including plexus itself)
-    pub fn list_full_schemas(&self) -> Vec<ActivationFullSchema> {
+    /// Get plugin schemas for all activations (including plexus itself)
+    pub fn list_plugin_schemas(&self) -> Vec<PluginSchema> {
         let mut schemas = Vec::new();
 
         // Include plexus itself
-        schemas.push(Activation::full_schema(self));
+        schemas.push(Activation::plugin_schema(self));
 
         // Include registered activations
         for a in self.inner.activations.values() {
-            schemas.push(a.full_schema());
+            schemas.push(a.plugin_schema());
         }
 
         schemas
+    }
+
+    /// Deprecated: use list_plugin_schemas instead
+    #[deprecated(note = "Use list_plugin_schemas instead")]
+    pub fn list_full_schemas(&self) -> Vec<PluginSchema> {
+        self.list_plugin_schemas()
     }
 
     /// Get help for a method
@@ -368,6 +335,14 @@ impl Plexus {
             return Err(PlexusError::InvalidParams(format!("Invalid method format: {}", method)));
         }
         Ok((parts[0], parts[1]))
+    }
+
+    /// Get child plugin schemas (for hub functionality)
+    /// Called by hub-macro when `hub` flag is set
+    pub fn plugin_children(&self) -> Vec<PluginSchema> {
+        self.inner.activations.values()
+            .map(|a| a.plugin_schema())
+            .collect()
     }
 
     /// Convert to RPC module
@@ -397,7 +372,8 @@ impl Plexus {
 #[hub_macro::hub_methods(
     namespace = "plexus",
     version = "1.0.0",
-    description = "Central routing and introspection"
+    description = "Central routing and introspection",
+    hub
 )]
 impl Plexus {
     /// Route a call to a registered activation
@@ -417,36 +393,23 @@ impl Plexus {
         self.route(&method, params).await
     }
 
-    /// Get plexus configuration hash
+    /// Get plexus configuration hash (from the recursive schema)
+    ///
+    /// This hash changes whenever any method or child plugin changes.
+    /// It's computed from the method hashes rolled up through the schema tree.
     #[hub_macro::hub_method(description = "Get plexus configuration hash")]
     async fn hash(&self) -> impl Stream<Item = HashEvent> + Send + 'static {
-        let hash = self.compute_hash();
-        stream! { yield HashEvent::Hash { value: hash }; }
+        // Get hash from the schema itself (recursive hash of all methods + children)
+        let schema = Activation::plugin_schema(self);
+        stream! { yield HashEvent::Hash { value: schema.hash }; }
     }
 
-    /// List all registered activations
-    #[hub_macro::hub_method(description = "List all registered activations")]
-    async fn list_activations(&self) -> impl Stream<Item = ListActivationsEvent> + Send + 'static {
-        let activations = self.list_activations_info();
-        stream! {
-            for a in activations {
-                yield ListActivationsEvent::Activation {
-                    namespace: a.namespace,
-                    version: a.version,
-                    description: a.description,
-                    methods: a.methods,
-                };
-            }
-        }
-    }
-
-    /// Get full plexus schema
+    /// Get full plexus schema (recursive, includes all children)
     #[hub_macro::hub_method(description = "Get full plexus schema")]
     async fn schema(&self) -> impl Stream<Item = SchemaEvent> + Send + 'static {
-        let activations = self.list_activations_info();
-        let total = self.list_methods().len();
+        let schema = Activation::plugin_schema(self);
         stream! {
-            yield SchemaEvent::Schema { activations, total_methods: total };
+            yield SchemaEvent::Schema(schema);
         }
     }
 }
@@ -467,8 +430,8 @@ mod tests {
         let methods = plexus.methods();
         assert!(methods.contains(&"call"));
         assert!(methods.contains(&"hash"));
-        assert!(methods.contains(&"list_activations"));
         assert!(methods.contains(&"schema"));
+        // list_activations was removed - use schema() instead
     }
 
     #[test]
@@ -476,5 +439,40 @@ mod tests {
         let p1 = Plexus::new();
         let p2 = Plexus::new();
         assert_eq!(p1.compute_hash(), p2.compute_hash());
+    }
+
+    #[test]
+    fn plexus_is_hub() {
+        use crate::activations::health::Health;
+        let plexus = Plexus::new().register(Health::new());
+        let schema = plexus.plugin_schema();
+
+        // Plexus should be a hub (has children)
+        assert!(schema.is_hub(), "plexus should be a hub");
+        assert!(!schema.is_leaf(), "plexus should not be a leaf");
+
+        // Should have children
+        let children = schema.children.expect("plexus should have children");
+        assert!(!children.is_empty(), "plexus should have at least one child");
+
+        // Health should be a leaf
+        let health = children.iter().find(|c| c.namespace == "health").expect("should have health child");
+        assert!(health.is_leaf(), "health should be a leaf plugin");
+    }
+
+    #[test]
+    fn plexus_recursive_schema() {
+        use crate::activations::health::Health;
+        let plexus = Plexus::new().register(Health::new());
+        let schema = plexus.plugin_schema();
+
+        // Pretty print the recursive schema
+        let json = serde_json::to_string_pretty(&schema).unwrap();
+        println!("Plexus recursive schema:\n{}", json);
+
+        // Verify structure
+        assert_eq!(schema.namespace, "plexus");
+        assert!(schema.methods.iter().any(|m| m.name == "call"));
+        assert!(schema.children.is_some());
     }
 }
