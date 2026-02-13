@@ -94,7 +94,7 @@ impl SqliteSessionManager {
             .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to parse DB URL: {}", e)))?;
         let connect_options = connect_options.disable_statement_logging();
 
-        let pool = SqlitePool::connect_with(connect_options.clone())
+        let pool = SqlitePool::connect_with(connect_options)
             .await
             .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to connect: {}", e)))?;
 
