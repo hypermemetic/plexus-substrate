@@ -208,11 +208,14 @@ mod tests {
     #[tokio::test]
     async fn test_wizard_with_auto_responses() {
         let ctx = auto_respond_channel(|req: &StandardRequest| match req {
-            StandardRequest::Prompt { .. } => StandardResponse::Text("my-project".into()),
-            StandardRequest::Select { options, .. } => {
-                StandardResponse::Selected(vec![options[0].value.clone()])
-            }
-            StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
+            StandardRequest::Prompt { .. } => StandardResponse::Text {
+                value: serde_json::Value::String("my-project".into()),
+            },
+            StandardRequest::Select { options, .. } => StandardResponse::Selected {
+                values: vec![options[0].value.clone()],
+            },
+            StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+            StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
         });
 
         let interactive = Interactive::new();
@@ -232,7 +235,9 @@ mod tests {
     async fn test_wizard_cancelled() {
         let ctx = auto_respond_channel(|req: &StandardRequest| match req {
             StandardRequest::Prompt { .. } => StandardResponse::Cancelled,
-            _ => StandardResponse::Cancelled,
+            StandardRequest::Select { .. } => StandardResponse::Cancelled,
+            StandardRequest::Confirm { .. } => StandardResponse::Cancelled,
+            StandardRequest::Custom { .. } => StandardResponse::Cancelled,
         });
 
         let interactive = Interactive::new();
@@ -243,7 +248,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_confirmed() {
-        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed(true));
+        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed {
+            value: true,
+        });
 
         let interactive = Interactive::new();
         let paths = vec!["file1.txt".into(), "file2.txt".into()];
@@ -257,7 +264,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_declined() {
-        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed(false));
+        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed {
+            value: false,
+        });
 
         let interactive = Interactive::new();
         let paths = vec!["file.txt".into()];
@@ -270,7 +279,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_confirm_yes() {
-        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed(true));
+        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed {
+            value: true,
+        });
 
         let interactive = Interactive::new();
         let events: Vec<ConfirmEvent> = interactive
@@ -284,7 +295,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_confirm_no() {
-        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed(false));
+        let ctx = auto_respond_channel(|_: &StandardRequest| StandardResponse::Confirmed {
+            value: false,
+        });
 
         let interactive = Interactive::new();
         let events: Vec<ConfirmEvent> = interactive
