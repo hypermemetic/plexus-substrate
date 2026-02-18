@@ -194,7 +194,7 @@ async fn test_direct_channel_request_response_flow() {
         assert!(matches!(req, StandardRequest::Confirm { message, .. } if message == "Delete file?"));
 
         // Send response
-        let response = StandardResponse::Confirmed(true);
+        let response = StandardResponse::<serde_json::Value>::Confirmed { value: true };
         channel
             .handle_response(request_id, serde_json::to_value(&response).unwrap())
             .expect("handle_response should succeed");
@@ -219,7 +219,10 @@ async fn test_prompt_request_response_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Text("John Doe".into())).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Text {
+                    value: serde_json::Value::String("John Doe".into()),
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -248,7 +251,10 @@ async fn test_select_request_response_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Selected(vec!["prod".into()])).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Selected {
+                    values: vec![serde_json::Value::String("prod".into())],
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -271,7 +277,7 @@ async fn test_cancelled_response_handling() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Cancelled).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Cancelled).unwrap(),
             )
             .unwrap();
     }
@@ -440,7 +446,10 @@ async fn test_type_mismatch_on_confirm() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Text("wrong".into())).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Text {
+                    value: serde_json::Value::String("wrong".into()),
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -468,7 +477,10 @@ async fn test_type_mismatch_on_prompt() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Confirmed(true)).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Confirmed {
+                    value: true,
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -487,15 +499,18 @@ async fn test_auto_respond_channel_custom() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
         StandardRequest::Confirm { message, .. } => {
             if message.contains("dangerous") {
-                StandardResponse::Confirmed(false)
+                StandardResponse::Confirmed { value: false }
             } else {
-                StandardResponse::Confirmed(true)
+                StandardResponse::Confirmed { value: true }
             }
         }
-        StandardRequest::Prompt { .. } => StandardResponse::Text("auto-response".into()),
-        StandardRequest::Select { options, .. } => {
-            StandardResponse::Selected(vec![options.last().unwrap().value.clone()])
-        }
+        StandardRequest::Prompt { .. } => StandardResponse::Text {
+            value: serde_json::Value::String("auto-response".into()),
+        },
+        StandardRequest::Select { options, .. } => StandardResponse::Selected {
+            values: vec![options.last().unwrap().value.clone()],
+        },
+        StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
     });
 
     // Test confirm logic
@@ -518,9 +533,14 @@ async fn test_auto_respond_channel_custom() {
 #[tokio::test]
 async fn test_concurrent_auto_responses() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
-        StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
-        StandardRequest::Prompt { message, .. } => StandardResponse::Text(message.clone()),
-        StandardRequest::Select { .. } => StandardResponse::Selected(vec!["selected".into()]),
+        StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+        StandardRequest::Prompt { message, .. } => StandardResponse::Text {
+            value: serde_json::Value::String(message.clone()),
+        },
+        StandardRequest::Select { .. } => StandardResponse::Selected {
+            values: vec![serde_json::Value::String("selected".into())],
+        },
+        StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
     });
 
     // Spawn multiple concurrent requests
@@ -632,7 +652,8 @@ async fn test_global_registry_request_response() {
         // Simulate MCP _plexus_respond tool call
         handle_pending_response(
             &request_id,
-            serde_json::to_value(&StandardResponse::Confirmed(true)).unwrap(),
+            serde_json::to_value(&StandardResponse::<serde_json::Value>::Confirmed { value: true })
+            .unwrap(),
         )
         .expect("handle_pending_response should succeed");
 
@@ -673,15 +694,20 @@ async fn test_multi_step_workflow_simulation() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
         StandardRequest::Prompt { message, .. } => {
             if message.contains("name") {
-                StandardResponse::Text("my-project".into())
+                StandardResponse::Text {
+                    value: serde_json::Value::String("my-project".into()),
+                }
             } else {
-                StandardResponse::Text("default".into())
+                StandardResponse::Text {
+                    value: serde_json::Value::String("default".into()),
+                }
             }
         }
-        StandardRequest::Select { options, .. } => {
-            StandardResponse::Selected(vec![options[0].value.clone()])
-        }
-        StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
+        StandardRequest::Select { options, .. } => StandardResponse::Selected {
+            values: vec![options[0].value.clone()],
+        },
+        StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+        StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
     });
 
     // Simulate a wizard-like workflow
@@ -738,9 +764,12 @@ async fn test_multi_step_workflow_cancellation() {
 
     // Auto-respond with cancellation at select step
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
-        StandardRequest::Prompt { .. } => StandardResponse::Text("test".into()),
+        StandardRequest::Prompt { .. } => StandardResponse::Text {
+            value: serde_json::Value::String("test".into()),
+        },
         StandardRequest::Select { .. } => StandardResponse::Cancelled,
-        StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
+        StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+        StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
     });
 
     let workflow = stream! {
@@ -813,7 +842,10 @@ async fn test_wrong_request_id() {
         // Respond with wrong request ID
         let result = channel.handle_response(
             "wrong-id-12345".to_string(),
-            serde_json::to_value(&StandardResponse::Confirmed(true)).unwrap(),
+            serde_json::to_value(&StandardResponse::<serde_json::Value>::Confirmed {
+                value: true,
+            })
+            .unwrap(),
         );
 
         assert!(
