@@ -52,9 +52,9 @@ impl ClaudeCodeStorage {
         arbor: Arc<ArborStorage>,
     ) -> Result<Self, ClaudeCodeError> {
         let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
-        let mut connect_options: SqliteConnectOptions = db_url.parse()
+        let connect_options: SqliteConnectOptions = db_url.parse()
             .map_err(|e| format!("Failed to parse database URL: {}", e))?;
-        connect_options.disable_statement_logging();
+        let connect_options = connect_options.disable_statement_logging();
         let pool = SqlitePool::connect_with(connect_options.clone())
             .await
             .map_err(|e| format!("Failed to connect to claudecode database: {}", e))?;

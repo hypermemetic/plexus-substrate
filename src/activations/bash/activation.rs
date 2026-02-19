@@ -94,11 +94,12 @@ mod tests {
 
         assert_eq!(schema.namespace, "bash");
         assert_eq!(schema.version, "1.0.0");
-        assert_eq!(schema.methods.len(), 1);
+        // 2 methods: user-defined "execute" + auto-generated "schema"
+        assert_eq!(schema.methods.len(), 2);
         assert!(schema.is_leaf(), "bash should be a leaf plugin");
 
-        let execute = &schema.methods[0];
-        assert_eq!(execute.name, "execute");
+        let execute = schema.methods.iter().find(|m| m.name == "execute")
+            .expect("should have an 'execute' method");
         assert!(execute.params.is_some(), "should have params schema");
         assert!(execute.returns.is_some(), "should have returns schema");
 
