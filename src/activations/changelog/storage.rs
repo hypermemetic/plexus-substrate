@@ -24,10 +24,10 @@ pub struct ChangelogStorage {
 
 impl ChangelogStorage {
     pub async fn new(config: ChangelogStorageConfig) -> Result<Self, String> {
-        let mut options = SqliteConnectOptions::new()
+        let options = SqliteConnectOptions::new()
             .filename(&config.db_path)
             .create_if_missing(true);
-        options.disable_statement_logging();
+        let options = options.disable_statement_logging();
 
         let pool = SqlitePool::connect_with(options.clone())
             .await

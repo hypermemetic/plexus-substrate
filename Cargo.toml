@@ -35,7 +35,7 @@ either = "1.9"
 schemars = { version = "1.1", features = ["derive", "uuid1"] }
 axum = { version = "0.7" }
 tower = "0.4"
-sqlx = { version = "0.6.3", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
 uuid = { version = "1.6", features = ["v4", "v5", "serde"] }
 rand = "0.8"
 hostname = "0.3"
@@ -63,7 +63,7 @@ cllient = { path = "../../juggernautlabs/cllient" }
 plexus-macros = "0.3.0"
 plexus-core = "0.3.0"
 plexus-transport = "0.1.0"
-hyperforge = "3.3.0"
+hyperforge = "4.0.0"
 # jsexec = "0.1.0"  # temporarily disabled - needs API updates
 registry = { package = "plexus-registry", version = "0.1.0" }
 
