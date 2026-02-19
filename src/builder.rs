@@ -12,6 +12,7 @@ use crate::activations::claudecode_loopback::{ClaudeCodeLoopback, LoopbackStorag
 use crate::activations::cone::{Cone, ConeStorageConfig};
 use crate::activations::echo::Echo;
 use crate::activations::health::Health;
+use crate::activations::interactive::Interactive;
 use crate::activations::mustache::{Mustache, MustacheStorageConfig};
 use crate::activations::solar::Solar;
 use crate::plexus::DynamicHub;
@@ -105,6 +106,7 @@ pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
             .register(loopback)
             // .register(jsexec)  // temporarily disabled
             .register(registry)
+            .register(Interactive::new())  // Bidirectional demo activation
             .register_hub(Solar::new())
             .register(HyperforgeHub::new())
     });
