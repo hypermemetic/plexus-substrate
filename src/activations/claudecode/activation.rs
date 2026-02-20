@@ -1,8 +1,10 @@
 use super::{
     executor::{ClaudeCodeExecutor, LaunchConfig},
+    sessions,
     storage::ClaudeCodeStorage,
     types::*,
 };
+use crate::activations::arbor::{NodeId, TreeId};
 use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
@@ -125,6 +127,25 @@ impl ClaudeCode<NoParent> {
     pub fn with_executor(storage: Arc<ClaudeCodeStorage>, executor: ClaudeCodeExecutor) -> Self {
         Self::with_executor_and_context(storage, executor)
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ARBOR EVENT CAPTURE HELPERS (Milestone 2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Create an arbor text node for a chat event
+async fn create_event_node(
+    arbor: &crate::activations::arbor::ArborStorage,
+    tree_id: &crate::activations::arbor::TreeId,
+    parent_id: &crate::activations::arbor::NodeId,
+    event: &NodeEvent,
+) -> Result<crate::activations::arbor::NodeId, String> {
+    let json = serde_json::to_string(event)
+        .map_err(|e| format!("Failed to serialize event: {}", e))?;
+
+    arbor.node_create_text(tree_id, Some(*parent_id), json, None)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[hub_methods(
@@ -264,6 +285,21 @@ impl<P: HubContext> ClaudeCode<P> {
 
             let user_position = Position::new(config.head.tree_id, user_node_id);
 
+            // Track current parent for event node chain (Milestone 2)
+            let mut current_parent = user_node_id;
+
+            // Create UserMessage event node (Milestone 2)
+            let user_event = NodeEvent::UserMessage { content: prompt.clone() };
+            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &user_event).await {
+                current_parent = node_id;
+            }
+
+            // Create AssistantStart event node (Milestone 2)
+            let start_event = NodeEvent::AssistantStart;
+            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &start_event).await {
+                current_parent = node_id;
+            }
+
             // 4. Emit Start
             yield ChatEvent::Start {
                 id: session_id,
@@ -317,6 +353,13 @@ impl<P: HubContext> ClaudeCode<P> {
                                 match delta {
                                     StreamDelta::TextDelta { text } => {
                                         response_content.push_str(&text);
+
+                                        // Create arbor node for text content (Milestone 2)
+                                        let event = NodeEvent::ContentText { text: text.clone() };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
                                         yield ChatEvent::Content { text };
                                     }
                                     StreamDelta::InputJsonDelta { partial_json } => {
@@ -336,6 +379,17 @@ impl<P: HubContext> ClaudeCode<P> {
                                 if let (Some(id), Some(name)) = (current_tool_id.take(), current_tool_name.take()) {
                                     let input: Value = serde_json::from_str(&current_tool_input)
                                         .unwrap_or(Value::Object(serde_json::Map::new()));
+
+                                    // Create arbor node for tool use (Milestone 2)
+                                    let event = NodeEvent::ContentToolUse {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        input: input.clone(),
+                                    };
+                                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                        current_parent = node_id;
+                                    }
+
                                     yield ChatEvent::ToolUse {
                                         tool_name: name,
                                         tool_use_id: id,
@@ -357,10 +411,27 @@ impl<P: HubContext> ClaudeCode<P> {
                                             // Only emit if we haven't already streamed this
                                             if response_content.is_empty() {
                                                 response_content.push_str(&text);
+
+                                                // Create arbor node for text content (Milestone 2)
+                                                let event = NodeEvent::ContentText { text: text.clone() };
+                                                if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                                    current_parent = node_id;
+                                                }
+
                                                 yield ChatEvent::Content { text };
                                             }
                                         }
                                         RawContentBlock::ToolUse { id, name, input } => {
+                                            // Create arbor node for tool use (Milestone 2)
+                                            let event = NodeEvent::ContentToolUse {
+                                                id: id.clone(),
+                                                name: name.clone(),
+                                                input: input.clone(),
+                                            };
+                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                                current_parent = node_id;
+                                            }
+
                                             yield ChatEvent::ToolUse {
                                                 tool_name: name,
                                                 tool_use_id: id,
@@ -368,6 +439,16 @@ impl<P: HubContext> ClaudeCode<P> {
                                             };
                                         }
                                         RawContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                                            // Create arbor node for tool result (Milestone 2)
+                                            let event = NodeEvent::UserToolResult {
+                                                tool_use_id: tool_use_id.clone(),
+                                                content: content.clone().unwrap_or_default(),
+                                                is_error: is_error.unwrap_or(false),
+                                            };
+                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                                current_parent = node_id;
+                                            }
+
                                             yield ChatEvent::ToolResult {
                                                 tool_use_id,
                                                 output: content.unwrap_or_default(),
@@ -375,6 +456,12 @@ impl<P: HubContext> ClaudeCode<P> {
                                             };
                                         }
                                         RawContentBlock::Thinking { thinking, .. } => {
+                                            // Create arbor node for thinking (Milestone 2)
+                                            let event = NodeEvent::ContentThinking { thinking: thinking.clone() };
+                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                                current_parent = node_id;
+                                            }
+
                                             yield ChatEvent::Thinking { thinking };
                                         }
                                     }
@@ -464,12 +551,18 @@ impl<P: HubContext> ClaudeCode<P> {
                 }
             };
 
+            // Create AssistantComplete event node (Milestone 2)
+            let complete_event = NodeEvent::AssistantComplete { usage: None };
+            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &complete_event).await {
+                current_parent = node_id;
+            }
+
             // 8. Create assistant node in Arbor (ephemeral if requested)
             let assistant_handle = ClaudeCodeStorage::message_to_handle(&assistant_msg, "assistant");
             let assistant_node_id = if is_ephemeral {
                 match storage.arbor().node_create_external_ephemeral(
                     &config.head.tree_id,
-                    Some(user_node_id),
+                    Some(current_parent),
                     assistant_handle,
                     None,
                 ).await {
@@ -482,7 +575,7 @@ impl<P: HubContext> ClaudeCode<P> {
             } else {
                 match storage.arbor().node_create_external(
                     &config.head.tree_id,
-                    Some(user_node_id),
+                    Some(current_parent),
                     assistant_handle,
                     None,
                 ).await {
@@ -769,6 +862,222 @@ impl<P: HubContext> ClaudeCode<P> {
             yield StreamListResult::Ok { streams };
         }
     }
+
+    /// Get arbor tree information for a session
+    #[plexus_macros::hub_method(params(
+        name = "Session name"
+    ))]
+    async fn get_tree(
+        &self,
+        name: String,
+    ) -> impl Stream<Item = GetTreeResult> + Send + 'static {
+        let storage = self.storage.clone();
+
+        stream! {
+            let config = match storage.session_get_by_name(&name).await {
+                Ok(c) => c,
+                Err(e) => {
+                    yield GetTreeResult::Err { message: e.to_string() };
+                    return;
+                }
+            };
+
+            yield GetTreeResult::Ok {
+                tree_id: config.head.tree_id,
+                head: config.head.node_id,
+            };
+        }
+    }
+
+    /// Render arbor tree as Claude API messages
+    #[plexus_macros::hub_method(params(
+        name = "Session name",
+        start = "Optional start node (default: root)",
+        end = "Optional end node (default: head)"
+    ))]
+    async fn render_context(
+        &self,
+        name: String,
+        start: Option<NodeId>,
+        end: Option<NodeId>,
+    ) -> impl Stream<Item = RenderResult> + Send + 'static {
+        let storage = self.storage.clone();
+
+        stream! {
+            // Get session config
+            let config = match storage.session_get_by_name(&name).await {
+                Ok(c) => c,
+                Err(e) => {
+                    yield RenderResult::Err { message: e.to_string() };
+                    return;
+                }
+            };
+
+            let tree_id = config.head.tree_id;
+            let end_node = end.unwrap_or(config.head.node_id);
+
+            // Get root if start not specified
+            let start_node = if let Some(s) = start {
+                s
+            } else {
+                match storage.arbor().tree_get(&tree_id).await {
+                    Ok(tree) => tree.root,
+                    Err(e) => {
+                        yield RenderResult::Err { message: e.to_string() };
+                        return;
+                    }
+                }
+            };
+
+            // Render messages
+            let messages = match storage.render_messages(&tree_id, &start_node, &end_node).await {
+                Ok(m) => m,
+                Err(e) => {
+                    yield RenderResult::Err { message: e.to_string() };
+                    return;
+                }
+            };
+
+            yield RenderResult::Ok { messages };
+        }
+    }
+
+    /// List all session files for a project
+    #[plexus_macros::hub_method(params(
+        project_path = "Project path (e.g., '-workspace-hypermemetic-hub-codegen')"
+    ))]
+    async fn sessions_list(
+        &self,
+        project_path: String,
+    ) -> impl Stream<Item = SessionsListResult> + Send + 'static {
+        stream! {
+            match sessions::list_sessions(&project_path).await {
+                Ok(sessions) => {
+                    yield SessionsListResult::Ok { sessions };
+                }
+                Err(e) => {
+                    yield SessionsListResult::Err { message: e };
+                }
+            }
+        }
+    }
+
+    /// Get events from a session file
+    #[plexus_macros::hub_method(params(
+        project_path = "Project path",
+        session_id = "Session ID (UUID)"
+    ))]
+    async fn sessions_get(
+        &self,
+        project_path: String,
+        session_id: String,
+    ) -> impl Stream<Item = SessionsGetResult> + Send + 'static {
+        stream! {
+            match sessions::read_session(&project_path, &session_id).await {
+                Ok(events) => {
+                    let event_count = events.len();
+                    // Convert to JSON values for transport
+                    let events_json: Vec<serde_json::Value> = events.into_iter()
+                        .filter_map(|e| serde_json::to_value(e).ok())
+                        .collect();
+
+                    yield SessionsGetResult::Ok {
+                        session_id: session_id.clone(),
+                        event_count,
+                        events: events_json,
+                    };
+                }
+                Err(e) => {
+                    yield SessionsGetResult::Err { message: e };
+                }
+            }
+        }
+    }
+
+    /// Import a session file into arbor
+    #[plexus_macros::hub_method(params(
+        project_path = "Project path",
+        session_id = "Session ID to import",
+        owner_id = "Owner ID for the new tree (default: 'claudecode')"
+    ))]
+    async fn sessions_import(
+        &self,
+        project_path: String,
+        session_id: String,
+        owner_id: Option<String>,
+    ) -> impl Stream<Item = SessionsImportResult> + Send + 'static {
+        let storage = self.storage.clone();
+
+        stream! {
+            let owner = owner_id.unwrap_or_else(|| "claudecode".to_string());
+
+            match sessions::import_to_arbor(storage.arbor(), &project_path, &session_id, &owner).await {
+                Ok(tree_id) => {
+                    yield SessionsImportResult::Ok {
+                        tree_id,
+                        session_id,
+                    };
+                }
+                Err(e) => {
+                    yield SessionsImportResult::Err { message: e };
+                }
+            }
+        }
+    }
+
+    /// Export an arbor tree to a session file
+    #[plexus_macros::hub_method(params(
+        tree_id = "Arbor tree ID to export",
+        project_path = "Project path",
+        session_id = "Session ID for the exported file"
+    ))]
+    async fn sessions_export(
+        &self,
+        tree_id: TreeId,
+        project_path: String,
+        session_id: String,
+    ) -> impl Stream<Item = SessionsExportResult> + Send + 'static {
+        let storage = self.storage.clone();
+
+        stream! {
+            match sessions::export_from_arbor(storage.arbor(), &tree_id, &project_path, &session_id).await {
+                Ok(()) => {
+                    yield SessionsExportResult::Ok {
+                        tree_id,
+                        session_id,
+                    };
+                }
+                Err(e) => {
+                    yield SessionsExportResult::Err { message: e };
+                }
+            }
+        }
+    }
+
+    /// Delete a session file
+    #[plexus_macros::hub_method(params(
+        project_path = "Project path",
+        session_id = "Session ID to delete"
+    ))]
+    async fn sessions_delete(
+        &self,
+        project_path: String,
+        session_id: String,
+    ) -> impl Stream<Item = SessionsDeleteResult> + Send + 'static {
+        stream! {
+            match sessions::delete_session(&project_path, &session_id).await {
+                Ok(()) => {
+                    yield SessionsDeleteResult::Ok {
+                        session_id,
+                        deleted: true,
+                    };
+                }
+                Err(e) => {
+                    yield SessionsDeleteResult::Err { message: e };
+                }
+            }
+        }
+    }
 }
 
 // Background task implementation (outside the hub_methods block)
@@ -849,6 +1158,21 @@ impl<P: HubContext> ClaudeCode<P> {
 
         let user_position = Position::new(config.head.tree_id, user_node_id);
 
+        // Track current parent for event node chain (Milestone 2)
+        let mut current_parent = user_node_id;
+
+        // Create UserMessage event node (Milestone 2)
+        let user_event = NodeEvent::UserMessage { content: prompt.clone() };
+        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &user_event).await {
+            current_parent = node_id;
+        }
+
+        // Create AssistantStart event node (Milestone 2)
+        let start_event = NodeEvent::AssistantStart;
+        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &start_event).await {
+            current_parent = node_id;
+        }
+
         // Update stream with user position
         let _ = storage.stream_set_user_position(&stream_id, user_position).await;
 
@@ -905,6 +1229,13 @@ impl<P: HubContext> ClaudeCode<P> {
                             match delta {
                                 StreamDelta::TextDelta { text } => {
                                     response_content.push_str(&text);
+
+                                    // Create arbor node for text content (Milestone 2)
+                                    let event = NodeEvent::ContentText { text: text.clone() };
+                                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                        current_parent = node_id;
+                                    }
+
                                     let _ = storage.stream_push_event(&stream_id, ChatEvent::Content { text }).await;
                                 }
                                 StreamDelta::InputJsonDelta { partial_json } => {
@@ -927,6 +1258,16 @@ impl<P: HubContext> ClaudeCode<P> {
                                 // Check if this is a loopback_permit call (tool waiting for approval)
                                 if name == "mcp__plexus__loopback_permit" {
                                     let _ = storage.stream_set_status(&stream_id, StreamStatus::AwaitingPermission, None).await;
+                                }
+
+                                // Create arbor node for tool use (Milestone 2)
+                                let event = NodeEvent::ContentToolUse {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                };
+                                if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                    current_parent = node_id;
                                 }
 
                                 let _ = storage.stream_push_event(&stream_id, ChatEvent::ToolUse {
@@ -954,10 +1295,27 @@ impl<P: HubContext> ClaudeCode<P> {
                                     RawContentBlock::Text { text } => {
                                         if response_content.is_empty() {
                                             response_content.push_str(&text);
+
+                                            // Create arbor node for text content (Milestone 2)
+                                            let event = NodeEvent::ContentText { text: text.clone() };
+                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                                current_parent = node_id;
+                                            }
+
                                             let _ = storage.stream_push_event(&stream_id, ChatEvent::Content { text }).await;
                                         }
                                     }
                                     RawContentBlock::ToolUse { id, name, input } => {
+                                        // Create arbor node for tool use (Milestone 2)
+                                        let event = NodeEvent::ContentToolUse {
+                                            id: id.clone(),
+                                            name: name.clone(),
+                                            input: input.clone(),
+                                        };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
                                         let _ = storage.stream_push_event(&stream_id, ChatEvent::ToolUse {
                                             tool_name: name,
                                             tool_use_id: id,
@@ -967,6 +1325,17 @@ impl<P: HubContext> ClaudeCode<P> {
                                     RawContentBlock::ToolResult { tool_use_id, content, is_error } => {
                                         // Tool completed - back to running if was awaiting
                                         let _ = storage.stream_set_status(&stream_id, StreamStatus::Running, None).await;
+
+                                        // Create arbor node for tool result (Milestone 2)
+                                        let event = NodeEvent::UserToolResult {
+                                            tool_use_id: tool_use_id.clone(),
+                                            content: content.clone().unwrap_or_default(),
+                                            is_error: is_error.unwrap_or(false),
+                                        };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
                                         let _ = storage.stream_push_event(&stream_id, ChatEvent::ToolResult {
                                             tool_use_id,
                                             output: content.unwrap_or_default(),
@@ -974,6 +1343,12 @@ impl<P: HubContext> ClaudeCode<P> {
                                         }).await;
                                     }
                                     RawContentBlock::Thinking { thinking, .. } => {
+                                        // Create arbor node for thinking (Milestone 2)
+                                        let event = NodeEvent::ContentThinking { thinking: thinking.clone() };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
                                         let _ = storage.stream_push_event(&stream_id, ChatEvent::Thinking { thinking }).await;
                                     }
                                 }
@@ -1059,12 +1434,18 @@ impl<P: HubContext> ClaudeCode<P> {
             }
         };
 
+        // Create AssistantComplete event node (Milestone 2)
+        let complete_event = NodeEvent::AssistantComplete { usage: None };
+        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &complete_event).await {
+            current_parent = node_id;
+        }
+
         // 7. Create assistant node in Arbor
         let assistant_handle = ClaudeCodeStorage::message_to_handle(&assistant_msg, "assistant");
         let assistant_node_id = if is_ephemeral {
             match storage.arbor().node_create_external_ephemeral(
                 &config.head.tree_id,
-                Some(user_node_id),
+                Some(current_parent),
                 assistant_handle,
                 None,
             ).await {
@@ -1078,7 +1459,7 @@ impl<P: HubContext> ClaudeCode<P> {
         } else {
             match storage.arbor().node_create_external(
                 &config.head.tree_id,
-                Some(user_node_id),
+                Some(current_parent),
                 assistant_handle,
                 None,
             ).await {

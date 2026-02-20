@@ -1,5 +1,6 @@
 mod activation;
 mod executor;
+pub mod sessions;  // Public for test access
 mod storage;
 mod types;
 
@@ -7,10 +8,12 @@ mod types;
 pub use activation::{ClaudeCode, ClaudeCodeMethod};
 pub use executor::{ClaudeCodeExecutor, LaunchConfig};
 pub use storage::{ClaudeCodeStorage, ClaudeCodeStorageConfig};
+pub use sessions::{AssistantEvent, AssistantMessage, ContentBlock, SessionEvent, UserEvent, UserMessage};
 pub use types::{
     BufferedEvent, ChatEvent, ChatStartResult, ChatUsage, ClaudeCodeConfig,
     ClaudeCodeError, ClaudeCodeHandle, ClaudeCodeId, ClaudeCodeInfo, CreateResult, DeleteResult,
     ForkResult, GetResult, ListResult, Message, MessageId, MessageRole, Model,
-    PollResult, Position, RawClaudeEvent, RawContentBlock, RawMessage,
+    NodeEvent, PollResult, Position, RawClaudeEvent, RawContentBlock, RawMessage,
+    SessionsDeleteResult, SessionsExportResult, SessionsGetResult, SessionsImportResult, SessionsListResult,
     StreamId, StreamInfo, StreamListResult, StreamStatus,
 };

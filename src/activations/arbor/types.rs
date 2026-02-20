@@ -566,6 +566,44 @@ pub enum ArborEvent {
     // Render
     #[serde(rename = "tree_render")]
     TreeRender { tree_id: TreeId, render: String },
+
+    // View operations
+    #[serde(rename = "view_created")]
+    ViewCreated {
+        view_tree_id: TreeId,
+        source_tree_id: TreeId,
+    },
+
+    #[serde(rename = "range_added")]
+    RangeAdded {
+        view_tree_id: TreeId,
+        range_node_id: NodeId,
+    },
+
+    #[serde(rename = "text_runs_detected")]
+    TextRunsDetected {
+        tree_id: TreeId,
+        runs: Vec<crate::activations::arbor::TextRun>,
+    },
+
+    #[serde(rename = "view_collapsed")]
+    ViewCollapsed {
+        view_tree_id: TreeId,
+        source_tree_id: TreeId,
+        collapsed_runs: Vec<crate::activations::arbor::TextRun>,
+    },
+
+    #[serde(rename = "range_content")]
+    RangeContent {
+        tree_id: TreeId,
+        start_node: NodeId,
+        end_node: NodeId,
+        content: crate::activations::arbor::RangeContent,
+    },
+
+    // Error
+    #[serde(rename = "error")]
+    Err { message: String },
 }
 
 // ============================================================================

@@ -1,9 +1,9 @@
 use super::types::{
     BufferedEvent, ChatEvent, ClaudeCodeConfig, ClaudeCodeError, ClaudeCodeHandle, ClaudeCodeId,
-    ClaudeCodeInfo, Message, MessageId, MessageRole, Model, Position, StreamId,
-    StreamInfo, StreamStatus,
+    ClaudeCodeInfo, ClaudeMessage, ContentBlock, Message, MessageId, MessageRole, Model,
+    NodeEvent, Position, StreamId, StreamInfo, StreamStatus,
 };
-use crate::activations::arbor::{ArborStorage, NodeId, TreeId};
+use crate::activations::arbor::{ArborStorage, NodeId, NodeType, TreeId};
 use serde_json::Value;
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, ConnectOptions, Row};
 use std::collections::HashMap;
@@ -800,6 +800,176 @@ impl ClaudeCodeStorage {
     }
 
     // ========================================================================
+    // Arbor Rendering (Milestone 3)
+    // ========================================================================
+
+    /// Render arbor tree path into Claude API messages format
+    ///
+    /// Walks from start to end node, parsing NodeEvent JSON from each node,
+    /// and groups into Claude messages array.
+    ///
+    /// # Algorithm
+    /// 1. Get path from start to end via arbor
+    /// 2. Parse each node's content as NodeEvent
+    /// 3. Group into messages based on event type
+    /// 4. Return messages array
+    pub async fn render_messages(
+        &self,
+        tree_id: &TreeId,
+        start: &NodeId,
+        end: &NodeId,
+    ) -> Result<Vec<ClaudeMessage>, ClaudeCodeError> {
+        // 1. Get path from root to end (returns Vec<NodeId>)
+        let node_ids = self
+            .arbor
+            .node_get_path(tree_id, end)
+            .await
+            .map_err(|e| format!("Failed to get node path: {}", e))?;
+
+        // Find the starting node in the path
+        let start_idx = node_ids
+            .iter()
+            .position(|id| id == start)
+            .ok_or_else(|| format!("Start node not found in path from root to end"))?;
+
+        let node_ids = &node_ids[start_idx..];
+
+        // 2. Get full node data for each node ID and group into messages
+        let mut messages: Vec<ClaudeMessage> = Vec::new();
+        let mut current_role: Option<String> = None;
+        let mut current_content: Vec<ContentBlock> = Vec::new();
+
+        for node_id in node_ids {
+            // Get the full node data
+            let node = self
+                .arbor
+                .node_get(tree_id, node_id)
+                .await
+                .map_err(|e| format!("Failed to get node: {}", e))?;
+
+            // Extract content from node data
+            let content = match &node.data {
+                NodeType::Text { content } => content,
+                NodeType::External { .. } => {
+                    // Skip external nodes for now
+                    continue;
+                }
+            };
+
+            // Skip empty nodes (like root)
+            if content.trim().is_empty() {
+                continue;
+            }
+
+            // Parse node content as NodeEvent
+            let event: NodeEvent = serde_json::from_str(content)
+                .map_err(|e| format!("Failed to parse node content as NodeEvent: {}", e))?;
+
+            match event {
+                NodeEvent::UserMessage { content } => {
+                    // Flush previous message if any
+                    if let Some(role) = current_role.take() {
+                        if !current_content.is_empty() {
+                            messages.push(ClaudeMessage {
+                                role,
+                                content: current_content.clone(),
+                            });
+                            current_content.clear();
+                        }
+                    }
+
+                    // Start new user message
+                    current_role = Some("user".to_string());
+                    current_content.push(ContentBlock::Text { text: content });
+                }
+
+                NodeEvent::AssistantStart => {
+                    // Flush previous message if any
+                    if let Some(role) = current_role.take() {
+                        if !current_content.is_empty() {
+                            messages.push(ClaudeMessage {
+                                role,
+                                content: current_content.clone(),
+                            });
+                            current_content.clear();
+                        }
+                    }
+
+                    // Start new assistant message
+                    current_role = Some("assistant".to_string());
+                }
+
+                NodeEvent::ContentText { text } => {
+                    // Add text content to current message
+                    current_content.push(ContentBlock::Text { text });
+                }
+
+                NodeEvent::ContentToolUse { id, name, input } => {
+                    // Add tool use to current message
+                    current_content.push(ContentBlock::ToolUse { id, name, input });
+                }
+
+                NodeEvent::ContentThinking { thinking } => {
+                    // Add thinking block to current message
+                    current_content.push(ContentBlock::Thinking { thinking });
+                }
+
+                NodeEvent::UserToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    // Flush current assistant message if any
+                    if let Some(role) = current_role.take() {
+                        if !current_content.is_empty() {
+                            messages.push(ClaudeMessage {
+                                role,
+                                content: current_content.clone(),
+                            });
+                            current_content.clear();
+                        }
+                    }
+
+                    // Tool results become separate user messages
+                    messages.push(ClaudeMessage {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        }],
+                    });
+                }
+
+                NodeEvent::AssistantComplete { usage: _ } => {
+                    // Flush current message if any
+                    if let Some(role) = current_role.take() {
+                        if !current_content.is_empty() {
+                            messages.push(ClaudeMessage {
+                                role,
+                                content: current_content.clone(),
+                            });
+                            current_content.clear();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Flush any remaining message
+        if let Some(role) = current_role {
+            if !current_content.is_empty() {
+                messages.push(ClaudeMessage {
+                    role,
+                    content: current_content,
+                });
+            }
+        }
+
+        Ok(messages)
+    }
+
+    // ========================================================================
     // Helper methods
     // ========================================================================
 
@@ -1004,5 +1174,486 @@ mod tests {
         let status = StreamStatus::Running;
         let json = serde_json::to_string(&status).unwrap();
         assert_eq!(json, "\"running\"");
+    }
+}
+
+// ============================================================================
+// Milestone 3 Tests: render_messages()
+// ============================================================================
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use crate::activations::arbor::{ArborConfig, ArborError};
+
+    /// Helper to create test storage with arbor
+    async fn create_test_storage() -> (ClaudeCodeStorage, PathBuf) {
+        let temp_dir = std::env::temp_dir();
+        let test_id = Uuid::new_v4();
+        let arbor_path = temp_dir.join(format!("test_arbor_{}.db", test_id));
+        let claudecode_path = temp_dir.join(format!("test_claudecode_{}.db", test_id));
+
+        let arbor_config = ArborConfig {
+            db_path: arbor_path.clone(),
+            scheduled_deletion_window: 604800,
+            archive_window: 2592000,
+            auto_cleanup: false, // Disable for tests
+            cleanup_interval: 3600,
+        };
+        let arbor = Arc::new(ArborStorage::new(arbor_config).await.unwrap());
+
+        let claudecode_config = ClaudeCodeStorageConfig {
+            db_path: claudecode_path.clone(),
+        };
+        let storage = ClaudeCodeStorage::new(claudecode_config, arbor)
+            .await
+            .unwrap();
+
+        (storage, arbor_path)
+    }
+
+    /// Helper to create a node with NodeEvent content
+    async fn create_event_node(
+        arbor: &ArborStorage,
+        tree_id: &TreeId,
+        parent_id: &NodeId,
+        event: &NodeEvent,
+    ) -> Result<NodeId, ArborError> {
+        let content = serde_json::to_string(event).map_err(|e| e.to_string())?;
+        arbor.node_create_text(tree_id, Some(*parent_id), content, None).await
+    }
+
+    #[tokio::test]
+    async fn test_render_simple_exchange() {
+        let (storage, _temp_path) = create_test_storage().await;
+        let arbor = storage.arbor();
+
+        // Create test arbor tree
+        let tree_id = arbor.tree_create(None, "test-session").await.unwrap();
+        let tree = arbor.tree_get(&tree_id).await.unwrap();
+        let root = tree.root;
+
+        // Build tree: root -> user -> assistant_start -> content -> assistant_complete
+        let user_node = create_event_node(
+            arbor,
+            &tree_id,
+            &root,
+            &NodeEvent::UserMessage {
+                content: "Hello".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let assistant_start = create_event_node(
+            arbor,
+            &tree_id,
+            &user_node,
+            &NodeEvent::AssistantStart,
+        )
+        .await
+        .unwrap();
+
+        let content_node = create_event_node(
+            arbor,
+            &tree_id,
+            &assistant_start,
+            &NodeEvent::ContentText {
+                text: "Hi there!".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let complete_node = create_event_node(
+            arbor,
+            &tree_id,
+            &content_node,
+            &NodeEvent::AssistantComplete { usage: None },
+        )
+        .await
+        .unwrap();
+
+        // Render from root to end
+        let messages = storage
+            .render_messages(&tree_id, &root, &complete_node)
+            .await
+            .unwrap();
+
+        // Verify: 2 messages (user + assistant)
+        assert_eq!(messages.len(), 2);
+
+        // Verify user message
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content.len(), 1);
+        if let ContentBlock::Text { text } = &messages[0].content[0] {
+            assert_eq!(text, "Hello");
+        } else {
+            panic!("Expected text content block");
+        }
+
+        // Verify assistant message
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content.len(), 1);
+        if let ContentBlock::Text { text } = &messages[1].content[0] {
+            assert_eq!(text, "Hi there!");
+        } else {
+            panic!("Expected text content block");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_render_with_tool_use() {
+        let (storage, _temp_path) = create_test_storage().await;
+        let arbor = storage.arbor();
+
+        // Create test arbor tree
+        let tree_id = arbor.tree_create(None, "test-tool-session").await.unwrap();
+        let tree = arbor.tree_get(&tree_id).await.unwrap();
+        let root = tree.root;
+
+        // Build tree with tool use:
+        // root -> user -> assistant_start -> content -> tool_use -> assistant_complete
+        //              -> user_tool_result -> assistant_start -> content -> assistant_complete
+        let user_node = create_event_node(
+            arbor,
+            &tree_id,
+            &root,
+            &NodeEvent::UserMessage {
+                content: "Write a file".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let assistant_start1 = create_event_node(
+            arbor,
+            &tree_id,
+            &user_node,
+            &NodeEvent::AssistantStart,
+        )
+        .await
+        .unwrap();
+
+        let content1 = create_event_node(
+            arbor,
+            &tree_id,
+            &assistant_start1,
+            &NodeEvent::ContentText {
+                text: "I'll write the file".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let tool_use = create_event_node(
+            arbor,
+            &tree_id,
+            &content1,
+            &NodeEvent::ContentToolUse {
+                id: "toolu_123".to_string(),
+                name: "Write".to_string(),
+                input: serde_json::json!({"file_path": "/tmp/test.txt", "content": "hello"}),
+            },
+        )
+        .await
+        .unwrap();
+
+        let complete1 = create_event_node(
+            arbor,
+            &tree_id,
+            &tool_use,
+            &NodeEvent::AssistantComplete { usage: None },
+        )
+        .await
+        .unwrap();
+
+        let tool_result = create_event_node(
+            arbor,
+            &tree_id,
+            &complete1,
+            &NodeEvent::UserToolResult {
+                tool_use_id: "toolu_123".to_string(),
+                content: "File written successfully".to_string(),
+                is_error: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let assistant_start2 = create_event_node(
+            arbor,
+            &tree_id,
+            &tool_result,
+            &NodeEvent::AssistantStart,
+        )
+        .await
+        .unwrap();
+
+        let content2 = create_event_node(
+            arbor,
+            &tree_id,
+            &assistant_start2,
+            &NodeEvent::ContentText {
+                text: "Done!".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let complete2 = create_event_node(
+            arbor,
+            &tree_id,
+            &content2,
+            &NodeEvent::AssistantComplete { usage: None },
+        )
+        .await
+        .unwrap();
+
+        // Render from root to end
+        let messages = storage
+            .render_messages(&tree_id, &root, &complete2)
+            .await
+            .unwrap();
+
+        // Verify: 4 messages (user, assistant with tool, user with result, assistant response)
+        assert_eq!(messages.len(), 4);
+
+        // Message 0: User message
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content.len(), 1);
+
+        // Message 1: Assistant message with text + tool_use
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content.len(), 2);
+        if let ContentBlock::Text { text } = &messages[1].content[0] {
+            assert_eq!(text, "I'll write the file");
+        } else {
+            panic!("Expected text content block");
+        }
+        if let ContentBlock::ToolUse { id, name, .. } = &messages[1].content[1] {
+            assert_eq!(id, "toolu_123");
+            assert_eq!(name, "Write");
+        } else {
+            panic!("Expected tool_use content block");
+        }
+
+        // Message 2: User message with tool_result
+        assert_eq!(messages[2].role, "user");
+        assert_eq!(messages[2].content.len(), 1);
+        if let ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } = &messages[2].content[0]
+        {
+            assert_eq!(tool_use_id, "toolu_123");
+            assert_eq!(content, "File written successfully");
+            assert_eq!(*is_error, false);
+        } else {
+            panic!("Expected tool_result content block");
+        }
+
+        // Message 3: Assistant response
+        assert_eq!(messages[3].role, "assistant");
+        assert_eq!(messages[3].content.len(), 1);
+        if let ContentBlock::Text { text } = &messages[3].content[0] {
+            assert_eq!(text, "Done!");
+        } else {
+            panic!("Expected text content block");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_render_with_thinking() {
+        let (storage, _temp_path) = create_test_storage().await;
+        let arbor = storage.arbor();
+
+        // Create test arbor tree
+        let tree_id = arbor.tree_create(None, "test-thinking").await.unwrap();
+        let tree = arbor.tree_get(&tree_id).await.unwrap();
+        let root = tree.root;
+
+        // Build tree with thinking block
+        let user_node = create_event_node(
+            arbor,
+            &tree_id,
+            &root,
+            &NodeEvent::UserMessage {
+                content: "Solve this problem".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let assistant_start = create_event_node(
+            arbor,
+            &tree_id,
+            &user_node,
+            &NodeEvent::AssistantStart,
+        )
+        .await
+        .unwrap();
+
+        let thinking = create_event_node(
+            arbor,
+            &tree_id,
+            &assistant_start,
+            &NodeEvent::ContentThinking {
+                thinking: "Let me think about this...".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let content = create_event_node(
+            arbor,
+            &tree_id,
+            &thinking,
+            &NodeEvent::ContentText {
+                text: "Here's the solution".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let complete = create_event_node(
+            arbor,
+            &tree_id,
+            &content,
+            &NodeEvent::AssistantComplete { usage: None },
+        )
+        .await
+        .unwrap();
+
+        // Render
+        let messages = storage
+            .render_messages(&tree_id, &root, &complete)
+            .await
+            .unwrap();
+
+        // Verify: 2 messages
+        assert_eq!(messages.len(), 2);
+
+        // Assistant message should have thinking + text
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content.len(), 2);
+        if let ContentBlock::Thinking { thinking } = &messages[1].content[0] {
+            assert_eq!(thinking, "Let me think about this...");
+        } else {
+            panic!("Expected thinking content block");
+        }
+        if let ContentBlock::Text { text } = &messages[1].content[1] {
+            assert_eq!(text, "Here's the solution");
+        } else {
+            panic!("Expected text content block");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_render_partial_path() {
+        let (storage, _temp_path) = create_test_storage().await;
+        let arbor = storage.arbor();
+
+        // Create test arbor tree
+        let tree_id = arbor.tree_create(None, "test-partial").await.unwrap();
+        let tree = arbor.tree_get(&tree_id).await.unwrap();
+        let root = tree.root;
+
+        // Build tree with multiple exchanges
+        let user1 = create_event_node(
+            arbor,
+            &tree_id,
+            &root,
+            &NodeEvent::UserMessage {
+                content: "First message".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let assistant_start1 = create_event_node(
+            arbor,
+            &tree_id,
+            &user1,
+            &NodeEvent::AssistantStart,
+        )
+        .await
+        .unwrap();
+
+        let content1 = create_event_node(
+            arbor,
+            &tree_id,
+            &assistant_start1,
+            &NodeEvent::ContentText {
+                text: "First response".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let complete1 = create_event_node(
+            arbor,
+            &tree_id,
+            &content1,
+            &NodeEvent::AssistantComplete { usage: None },
+        )
+        .await
+        .unwrap();
+
+        let user2 = create_event_node(
+            arbor,
+            &tree_id,
+            &complete1,
+            &NodeEvent::UserMessage {
+                content: "Second message".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let assistant_start2 = create_event_node(
+            arbor,
+            &tree_id,
+            &user2,
+            &NodeEvent::AssistantStart,
+        )
+        .await
+        .unwrap();
+
+        let content2 = create_event_node(
+            arbor,
+            &tree_id,
+            &assistant_start2,
+            &NodeEvent::ContentText {
+                text: "Second response".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let complete2 = create_event_node(
+            arbor,
+            &tree_id,
+            &content2,
+            &NodeEvent::AssistantComplete { usage: None },
+        )
+        .await
+        .unwrap();
+
+        // Render from user2 to end (should skip first exchange)
+        let messages = storage
+            .render_messages(&tree_id, &user2, &complete2)
+            .await
+            .unwrap();
+
+        // Verify: 2 messages (only second exchange)
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        if let ContentBlock::Text { text } = &messages[0].content[0] {
+            assert_eq!(text, "Second message");
+        } else {
+            panic!("Expected text content block");
+        }
     }
 }
