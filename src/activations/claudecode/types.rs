@@ -247,7 +247,7 @@ impl From<&ClaudeCodeConfig> for ClaudeCodeInfo {
 }
 
 /// Token usage information
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -664,4 +664,340 @@ pub enum RawContentBlock {
         content: Option<String>,
         is_error: Option<bool>,
     },
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ARBOR SOURCE OF TRUTH TYPES (Milestone 1)
+// These types enable storing conversation events as arbor nodes and rendering
+// them back into Claude API message format for time travel, forking, etc.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Events stored as arbor text nodes - each event is a self-describing JSON blob
+/// that maps 1:1 to Claude API structures
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NodeEvent {
+    /// User message node
+    #[serde(rename = "user_message")]
+    UserMessage { content: String },
+
+    /// Assistant turn start marker
+    #[serde(rename = "assistant_start")]
+    AssistantStart,
+
+    /// Text content block (child of assistant_start)
+    #[serde(rename = "content_text")]
+    ContentText { text: String },
+
+    /// Tool use block (child of assistant_start)
+    #[serde(rename = "content_tool_use")]
+    ContentToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+
+    /// Thinking block (child of assistant_start)
+    #[serde(rename = "content_thinking")]
+    ContentThinking { thinking: String },
+
+    /// Tool result message (becomes a user message in Claude API)
+    #[serde(rename = "user_tool_result")]
+    UserToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+
+    /// Assistant turn complete marker
+    #[serde(rename = "assistant_complete")]
+    AssistantComplete { usage: Option<ChatUsage> },
+}
+
+/// Claude API message format - what we render arbor nodes into
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ClaudeMessage {
+    /// Role: "user" or "assistant"
+    pub role: String,
+    /// Message content blocks
+    pub content: Vec<ContentBlock>,
+}
+
+/// Content blocks within a Claude message
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    /// Text content
+    #[serde(rename = "text")]
+    Text { text: String },
+
+    /// Tool use
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+
+    /// Tool result
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+
+    /// Thinking block
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String },
+}
+
+/// Result of render_context method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RenderResult {
+    #[serde(rename = "ok")]
+    Ok { messages: Vec<ClaudeMessage> },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+/// Result of get_tree method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GetTreeResult {
+    #[serde(rename = "ok")]
+    Ok { tree_id: TreeId, head: NodeId },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION FILE CRUD RESULTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Result of sessions_list method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionsListResult {
+    #[serde(rename = "ok")]
+    Ok { sessions: Vec<String> },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+/// Result of sessions_get method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionsGetResult {
+    #[serde(rename = "ok")]
+    Ok {
+        session_id: String,
+        event_count: usize,
+        events: Vec<serde_json::Value>,
+    },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+/// Result of sessions_import method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionsImportResult {
+    #[serde(rename = "ok")]
+    Ok { tree_id: TreeId, session_id: String },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+/// Result of sessions_export method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionsExportResult {
+    #[serde(rename = "ok")]
+    Ok { tree_id: TreeId, session_id: String },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+/// Result of sessions_delete method
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionsDeleteResult {
+    #[serde(rename = "ok")]
+    Ok { session_id: String, deleted: bool },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_event_serialization() {
+        let event = NodeEvent::ContentText {
+            text: "Hello".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: NodeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, parsed);
+    }
+
+    #[test]
+    fn test_claude_message_structure() {
+        let msg = ClaudeMessage {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "test".to_string(),
+            }],
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+        assert_eq!(json["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn test_json_schema_generation() {
+        use schemars::schema_for;
+
+        // Test that all new types generate schemas without panicking
+        let _schema = schema_for!(NodeEvent);
+        let _schema = schema_for!(ClaudeMessage);
+        let _schema = schema_for!(ContentBlock);
+        let _schema = schema_for!(RenderResult);
+        let _schema = schema_for!(GetTreeResult);
+    }
+
+    #[test]
+    fn test_all_node_event_variants() {
+        // Test serialization of all NodeEvent variants
+        let events = vec![
+            NodeEvent::UserMessage {
+                content: "Hello".to_string(),
+            },
+            NodeEvent::AssistantStart,
+            NodeEvent::ContentText {
+                text: "Response".to_string(),
+            },
+            NodeEvent::ContentToolUse {
+                id: "tool_123".to_string(),
+                name: "Write".to_string(),
+                input: serde_json::json!({"file": "test.txt"}),
+            },
+            NodeEvent::ContentThinking {
+                thinking: "Let me think...".to_string(),
+            },
+            NodeEvent::UserToolResult {
+                tool_use_id: "tool_123".to_string(),
+                content: "Success".to_string(),
+                is_error: false,
+            },
+            NodeEvent::AssistantComplete {
+                usage: Some(ChatUsage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(200),
+                    cost_usd: Some(0.01),
+                    num_turns: Some(1),
+                }),
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let parsed: NodeEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(event, parsed);
+        }
+    }
+
+    #[test]
+    fn test_all_content_block_variants() {
+        // Test serialization of all ContentBlock variants
+        let blocks = vec![
+            ContentBlock::Text {
+                text: "Hello".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "tool_456".to_string(),
+                name: "Bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: "tool_456".to_string(),
+                content: "file1.txt\nfile2.txt".to_string(),
+                is_error: false,
+            },
+            ContentBlock::Thinking {
+                thinking: "Analyzing...".to_string(),
+            },
+        ];
+
+        for block in blocks {
+            let json = serde_json::to_string(&block).unwrap();
+            let parsed: ContentBlock = serde_json::from_str(&json).unwrap();
+            assert_eq!(block, parsed);
+        }
+    }
+
+    #[test]
+    fn test_node_event_json_format() {
+        // Verify that NodeEvent produces the expected JSON structure
+        let event = NodeEvent::ContentToolUse {
+            id: "toolu_123".to_string(),
+            name: "Write".to_string(),
+            input: serde_json::json!({"path": "/tmp/test.txt"}),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "content_tool_use");
+        assert_eq!(json["id"], "toolu_123");
+        assert_eq!(json["name"], "Write");
+        assert_eq!(json["input"]["path"], "/tmp/test.txt");
+    }
+
+    #[test]
+    fn test_render_result_variants() {
+        // Test RenderResult::Ok
+        let result = RenderResult::Ok {
+            messages: vec![ClaudeMessage {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "test".to_string(),
+                }],
+            }],
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["type"], "ok");
+        assert!(json["messages"].is_array());
+
+        // Test RenderResult::Err
+        let result = RenderResult::Err {
+            message: "test error".to_string(),
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["message"], "test error");
+    }
+
+    #[test]
+    fn test_get_tree_result_variants() {
+        use crate::activations::arbor::{NodeId, TreeId};
+
+        // Test GetTreeResult::Ok
+        let tree_id = TreeId::new();
+        let node_id = NodeId::new();
+        let result = GetTreeResult::Ok {
+            tree_id,
+            head: node_id,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["type"], "ok");
+
+        // Test GetTreeResult::Err
+        let result = GetTreeResult::Err {
+            message: "not found".to_string(),
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["message"], "not found");
+    }
 }
