@@ -1,17 +1,17 @@
 [package]
-name = "substrate"
+name = "plexus-substrate"
 version = "0.2.6"
 edition = "2021"
 description = "Reference Plexus RPC server with conversation trees and LLM orchestration"
 license = "AGPL-3.0-only"
-default-run = "substrate"
+default-run = "plexus-substrate"
 
 [lib]
-name = "substrate"
+name = "plexus_substrate"
 path = "src/lib.rs"
 
 [[bin]]
-name = "substrate"
+name = "plexus-substrate"
 path = "src/main.rs"
 
 [[bin]]
@@ -64,7 +64,7 @@ plexus-macros = "0.3.0"
 plexus-core = "0.3.0"
 plexus-transport = "0.1.0"
 hyperforge = "4.0.0"
-# jsexec = "0.1.0"  # temporarily disabled - needs API updates
+# plexus-jsexec = "0.1.0"  # temporarily disabled - needs API updates
 registry = { package = "plexus-registry", version = "0.1.0" }
 
 # Mustache templating
