@@ -17,7 +17,7 @@ use crate::activations::mustache::{Mustache, MustacheStorageConfig};
 use crate::activations::solar::Solar;
 use crate::plexus::DynamicHub;
 use hyperforge::HyperforgeHub;
-// use jsexec::{JsExec, JsExecConfig};  // temporarily disabled - needs API updates
+// use plexus_jsexec::{JsExec, JsExecConfig};  // temporarily disabled - needs API updates
 use registry::Registry;
 
 /// Build the Plexus RPC hub with registered activations
