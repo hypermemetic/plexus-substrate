@@ -176,7 +176,17 @@ impl ArborStorage {
         metadata: Option<serde_json::Value>,
         owner_id: &str,
     ) -> Result<TreeId, ArborError> {
-        let tree_id = TreeId::new();
+        self.tree_create_with_id(None, metadata, owner_id).await
+    }
+
+    /// Create a new tree with an optional custom ID (derived from path)
+    pub async fn tree_create_with_id(
+        &self,
+        tree_id: Option<TreeId>,
+        metadata: Option<serde_json::Value>,
+        owner_id: &str,
+    ) -> Result<TreeId, ArborError> {
+        let tree_id = tree_id.unwrap_or_else(TreeId::new);
         let root_id = NodeId::new();
         let now = current_timestamp();
 
@@ -1010,6 +1020,55 @@ impl ArborStorage {
         .map_err(|e| format!("Failed to archive trees: {}", e))?;
 
         Ok(result.rows_affected() as usize)
+    }
+
+    /// Query trees by metadata filter (e.g., {"type": "orcha_monitor"})
+    pub async fn tree_query_by_metadata(&self, filter: &Value) -> Result<Vec<TreeId>, ArborError> {
+        let rows = sqlx::query(
+            "SELECT id, metadata FROM trees WHERE state = 'active'"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to query trees: {}", e))?;
+
+        let mut matching_trees = Vec::new();
+
+        for row in rows {
+            let tree_id_str: String = row.get("id");
+            let metadata_str: Option<String> = row.get("metadata");
+
+            if let Some(metadata_json) = metadata_str {
+                if let Ok(metadata) = serde_json::from_str::<Value>(&metadata_json) {
+                    // Check if metadata matches filter
+                    if metadata_matches(filter, &metadata) {
+                        if let Ok(tree_id) = ArborId::parse_str(&tree_id_str) {
+                            matching_trees.push(tree_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(matching_trees)
+    }
+}
+
+/// Helper to check if metadata matches a filter
+fn metadata_matches(filter: &Value, metadata: &Value) -> bool {
+    match (filter, metadata) {
+        (Value::Object(filter_obj), Value::Object(meta_obj)) => {
+            // Check if all filter keys exist in metadata with matching values
+            filter_obj.iter().all(|(key, filter_value)| {
+                meta_obj.get(key).map_or(false, |meta_value| {
+                    metadata_matches(filter_value, meta_value)
+                })
+            })
+        }
+        (Value::Array(filter_arr), Value::Array(meta_arr)) => {
+            // Arrays must match exactly (for simplicity)
+            filter_arr == meta_arr
+        }
+        (filter_val, meta_val) => filter_val == meta_val,
     }
 }
 

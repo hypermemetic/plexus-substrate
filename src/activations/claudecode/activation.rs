@@ -22,7 +22,7 @@ use tracing::Instrument;
 /// - `NoParent` for standalone testing
 #[derive(Clone)]
 pub struct ClaudeCode<P: HubContext = NoParent> {
-    storage: Arc<ClaudeCodeStorage>,
+    pub storage: Arc<ClaudeCodeStorage>,
     executor: ClaudeCodeExecutor,
     /// Hub reference for resolving foreign handles when walking arbor trees
     hub: Arc<OnceLock<P>>,
@@ -163,7 +163,7 @@ impl<P: HubContext> ClaudeCode<P> {
         system_prompt = "Optional system prompt / instructions",
         loopback_enabled = "Enable loopback mode - routes tool permissions through parent for approval"
     ))]
-    async fn create(
+    pub async fn create(
         &self,
         name: String,
         working_dir: String,
@@ -198,7 +198,7 @@ impl<P: HubContext> ClaudeCode<P> {
             ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
         )
     )]
-    async fn chat(
+    pub async fn chat(
         &self,
         name: String,
         prompt: String,
