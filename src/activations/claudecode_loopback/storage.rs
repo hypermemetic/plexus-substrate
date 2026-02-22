@@ -168,6 +168,21 @@ impl LoopbackStorage {
         Ok(())
     }
 
+    /// Get all pending approvals for a session
+    pub async fn get_pending_approvals(&self, session_id: &str) -> Vec<ApprovalRequest> {
+        let rows = sqlx::query(
+            "SELECT * FROM loopback_approvals WHERE session_id = ? AND status = 'pending'"
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await;
+
+        match rows {
+            Ok(rows) => rows.into_iter().filter_map(|row| self.row_to_approval(row).ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
     pub async fn list_pending(&self, session_id: Option<&str>) -> Result<Vec<ApprovalRequest>, String> {
         let rows = if let Some(sid) = session_id {
             sqlx::query(
