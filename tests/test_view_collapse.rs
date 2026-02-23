@@ -1,4 +1,4 @@
-use substrate::activations::arbor::{ArborConfig, ArborStorage, CollapseType};
+use plexus_substrate::activations::arbor::{ArborConfig, ArborStorage, CollapseType};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -37,7 +37,7 @@ async fn test_view_collapse_text_runs() {
 
     // Get the tree's root to use as parent for first node
     let tree = storage.tree_get(&tree_id).await.unwrap();
-    let mut parent_id: Option<substrate::activations::arbor::NodeId> = Some(tree.root);
+    let mut parent_id: Option<plexus_substrate::activations::arbor::NodeId> = Some(tree.root);
 
     for text in &texts {
         let node_id = storage
@@ -109,7 +109,7 @@ async fn test_view_collapse_text_runs() {
         .unwrap();
 
     match range_content {
-        substrate::activations::arbor::RangeContent::Text {
+        plexus_substrate::activations::arbor::RangeContent::Text {
             content,
             node_count,
             ..
