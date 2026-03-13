@@ -5,8 +5,10 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 /// Configuration for a Claude Code session launch
 #[derive(Debug, Clone)]
@@ -326,6 +328,22 @@ impl ClaudeCodeExecutor {
             let stdout = child.stdout.take().expect("stdout");
             let mut reader = BufReader::with_capacity(10 * 1024 * 1024, stdout).lines(); // 10MB buffer
 
+            // Capture stderr in a background task to prevent pipe buffer blocking
+            let stderr_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let stderr = child.stderr.take().expect("stderr");
+            let stderr_buf = stderr_buffer.clone();
+            tokio::spawn(async move {
+                let mut stderr_reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    let mut buf = stderr_buf.lock().await;
+                    if buf.len() < 100 {
+                        buf.push(line);
+                    }
+                }
+            });
+
+            let mut got_result = false;
+
             // Stream events from stdout
             while let Ok(Some(line)) = reader.next_line().await {
                 if line.trim().is_empty() {
@@ -335,6 +353,9 @@ impl ClaudeCodeExecutor {
                 match serde_json::from_str::<RawClaudeEvent>(&line) {
                     Ok(event) => {
                         let is_result = matches!(event, RawClaudeEvent::Result { .. });
+                        if is_result {
+                            got_result = true;
+                        }
                         yield event;
                         if is_result {
                             break;
@@ -362,8 +383,50 @@ impl ClaudeCodeExecutor {
                 }
             }
 
-            // Cleanup
-            let _ = child.wait().await;
+            // Cleanup: capture exit status and surface errors
+            let exit_status = child.wait().await;
+            let exit_code = exit_status.as_ref().ok().and_then(|s| s.code());
+
+            tracing::debug!(exit_code = ?exit_code, "Claude process exited");
+
+            let stderr_lines = stderr_buffer.lock().await;
+            if !stderr_lines.is_empty() {
+                tracing::warn!(
+                    stderr_line_count = stderr_lines.len(),
+                    stderr_preview = %stderr_lines.join("\n"),
+                    "Claude process produced stderr output"
+                );
+            }
+
+            let non_zero_exit = exit_code.map_or(true, |c| c != 0);
+            if non_zero_exit || !got_result {
+                let error_msg = if stderr_lines.is_empty() {
+                    let code_str = exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    format!("Claude process exited with code {} but produced no output", code_str)
+                } else {
+                    let stderr_content = stderr_lines.join("\n").trim().to_string();
+                    match exit_code {
+                        Some(c) if c != 0 => format!("Claude process exited with code {}:\n{}", c, stderr_content),
+                        _ => stderr_content,
+                    }
+                };
+
+                yield RawClaudeEvent::Result {
+                    subtype: Some("error".to_string()),
+                    session_id: None,
+                    cost_usd: None,
+                    is_error: Some(true),
+                    duration_ms: None,
+                    num_turns: None,
+                    result: None,
+                    error: Some(error_msg),
+                };
+            }
+
+            drop(stderr_lines);
+
             if let Some(path) = mcp_path {
                 let _ = tokio::fs::remove_file(path).await;
             }

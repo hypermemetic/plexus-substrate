@@ -16,7 +16,6 @@ use crate::activations::interactive::Interactive;
 use crate::activations::mustache::{Mustache, MustacheStorageConfig};
 use crate::activations::solar::Solar;
 use crate::plexus::DynamicHub;
-use hyperforge::HyperforgeHub;
 // use plexus_jsexec::{JsExec, JsExecConfig};  // temporarily disabled - needs API updates
 use registry::Registry;
 
@@ -108,7 +107,6 @@ pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
             .register(registry)
             .register(Interactive::new())  // Bidirectional demo activation
             .register_hub(Solar::new())
-            .register(HyperforgeHub::new())
     });
 
     // Run changelog startup check
