@@ -515,6 +515,14 @@ impl<P: HubContext> ClaudeCode<P> {
                 }
             }
 
+            // Guard: if stream produced nothing, emit error instead of ghost Complete
+            if response_content.is_empty() && claude_session_id.is_none() {
+                yield ChatEvent::Err {
+                    message: "Claude process produced no response. Check substrate logs for details.".to_string(),
+                };
+                return;
+            }
+
             // 7. Store assistant response (ephemeral if requested)
             let model_id = format!("claude-code-{}", config.model.as_str());
             let assistant_msg = if is_ephemeral {
