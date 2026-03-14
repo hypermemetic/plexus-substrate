@@ -1111,8 +1111,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1125,8 +1129,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1143,8 +1151,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(id) => id,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1157,8 +1169,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(id) => id,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1182,13 +1198,17 @@ impl<P: HubContext> ClaudeCode<P> {
         }
 
         // Update stream with user position
-        let _ = storage.stream_set_user_position(&stream_id, user_position).await;
+        if let Err(e) = storage.stream_set_user_position(&stream_id, user_position).await {
+            tracing::error!(stream_id = %stream_id, error = %e, "Failed to set user position on stream");
+        }
 
         // 3. Push Start event
-        let _ = storage.stream_push_event(&stream_id, ChatEvent::Start {
+        if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Start {
             id: session_id,
             user_position,
-        }).await;
+        }).await {
+            tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+        }
 
         // 4. Build launch config
         let launch_config = LaunchConfig {
@@ -1244,7 +1264,9 @@ impl<P: HubContext> ClaudeCode<P> {
                                         current_parent = node_id;
                                     }
 
-                                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Content { text }).await;
+                                    if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Content { text }).await {
+                                        tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                                    }
                                 }
                                 StreamDelta::InputJsonDelta { partial_json } => {
                                     current_tool_input.push_str(&partial_json);
@@ -1265,7 +1287,9 @@ impl<P: HubContext> ClaudeCode<P> {
 
                                 // Check if this is a loopback_permit call (tool waiting for approval)
                                 if name == "mcp__plexus__loopback_permit" {
-                                    let _ = storage.stream_set_status(&stream_id, StreamStatus::AwaitingPermission, None).await;
+                                    if let Err(e) = storage.stream_set_status(&stream_id, StreamStatus::AwaitingPermission, None).await {
+                                        tracing::error!(stream_id = %stream_id, error = %e, "Failed to update stream status");
+                                    }
                                 }
 
                                 // Create arbor node for tool use (Milestone 2)
@@ -1278,11 +1302,13 @@ impl<P: HubContext> ClaudeCode<P> {
                                     current_parent = node_id;
                                 }
 
-                                let _ = storage.stream_push_event(&stream_id, ChatEvent::ToolUse {
+                                if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::ToolUse {
                                     tool_name: name,
                                     tool_use_id: id,
                                     input,
-                                }).await;
+                                }).await {
+                                    tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                                }
                                 current_tool_input.clear();
                             }
                         }
@@ -1310,7 +1336,9 @@ impl<P: HubContext> ClaudeCode<P> {
                                                 current_parent = node_id;
                                             }
 
-                                            let _ = storage.stream_push_event(&stream_id, ChatEvent::Content { text }).await;
+                                            if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Content { text }).await {
+                                                tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                                            }
                                         }
                                     }
                                     RawContentBlock::ToolUse { id, name, input } => {
@@ -1324,15 +1352,19 @@ impl<P: HubContext> ClaudeCode<P> {
                                             current_parent = node_id;
                                         }
 
-                                        let _ = storage.stream_push_event(&stream_id, ChatEvent::ToolUse {
+                                        if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::ToolUse {
                                             tool_name: name,
                                             tool_use_id: id,
                                             input,
-                                        }).await;
+                                        }).await {
+                                            tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                                        }
                                     }
                                     RawContentBlock::ToolResult { tool_use_id, content, is_error } => {
                                         // Tool completed - back to running if was awaiting
-                                        let _ = storage.stream_set_status(&stream_id, StreamStatus::Running, None).await;
+                                        if let Err(e) = storage.stream_set_status(&stream_id, StreamStatus::Running, None).await {
+                                            tracing::error!(stream_id = %stream_id, error = %e, "Failed to update stream status");
+                                        }
 
                                         // Create arbor node for tool result (Milestone 2)
                                         let event = NodeEvent::UserToolResult {
@@ -1344,11 +1376,13 @@ impl<P: HubContext> ClaudeCode<P> {
                                             current_parent = node_id;
                                         }
 
-                                        let _ = storage.stream_push_event(&stream_id, ChatEvent::ToolResult {
+                                        if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::ToolResult {
                                             tool_use_id,
                                             output: content.unwrap_or_default(),
                                             is_error: is_error.unwrap_or(false),
-                                        }).await;
+                                        }).await {
+                                            tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                                        }
                                     }
                                     RawContentBlock::Thinking { thinking, .. } => {
                                         // Create arbor node for thinking (Milestone 2)
@@ -1357,7 +1391,9 @@ impl<P: HubContext> ClaudeCode<P> {
                                             current_parent = node_id;
                                         }
 
-                                        let _ = storage.stream_push_event(&stream_id, ChatEvent::Thinking { thinking }).await;
+                                        if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Thinking { thinking }).await {
+                                            tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                                        }
                                     }
                                 }
                             }
@@ -1380,8 +1416,12 @@ impl<P: HubContext> ClaudeCode<P> {
 
                     if is_error == Some(true) {
                         if let Some(err_msg) = error {
-                            let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: err_msg.clone() }).await;
-                            let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(err_msg)).await;
+                            if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: err_msg.clone() }).await {
+                                tracing::error!(stream_id = %stream_id, error = %e, "Failed to push error event to stream");
+                            }
+                            if let Err(e) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(err_msg)).await {
+                                tracing::error!(stream_id = %stream_id, error = %e, "Failed to update stream status to Failed");
+                            }
                             return;
                         }
                     }
@@ -1389,14 +1429,18 @@ impl<P: HubContext> ClaudeCode<P> {
                 RawClaudeEvent::Unknown { event_type, data } => {
                     match storage.unknown_event_store(Some(&session_id), &event_type, &data).await {
                         Ok(handle) => {
-                            let _ = storage.stream_push_event(&stream_id, ChatEvent::Passthrough { event_type, handle, data }).await;
+                            if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Passthrough { event_type, handle, data }).await {
+                                tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                            }
                         }
                         Err(_) => {
-                            let _ = storage.stream_push_event(&stream_id, ChatEvent::Passthrough {
+                            if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Passthrough {
                                 event_type,
                                 handle: "storage-failed".to_string(),
                                 data,
-                            }).await;
+                            }).await {
+                                tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+                            }
                         }
                     }
                 }
@@ -1418,8 +1462,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1435,8 +1483,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1459,8 +1511,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(id) => id,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1473,8 +1529,12 @@ impl<P: HubContext> ClaudeCode<P> {
             ).await {
                 Ok(id) => id,
                 Err(e) => {
-                    let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                    let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                    if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                    }
+                    if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                        tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                    }
                     return;
                 }
             }
@@ -1485,14 +1545,18 @@ impl<P: HubContext> ClaudeCode<P> {
         // 8. Update session head (skip for ephemeral)
         if !is_ephemeral {
             if let Err(e) = storage.session_update_head(&session_id, assistant_node_id, claude_session_id.clone()).await {
-                let _ = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await;
-                let _ = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await;
+                if let Err(e2) = storage.stream_push_event(&stream_id, ChatEvent::Err { message: e.to_string() }).await {
+                    tracing::error!(stream_id = %stream_id, error = %e2, "Failed to push error event to stream");
+                }
+                if let Err(e2) = storage.stream_set_status(&stream_id, StreamStatus::Failed, Some(e.to_string())).await {
+                    tracing::error!(stream_id = %stream_id, error = %e2, "Failed to update stream status to Failed");
+                }
                 return;
             }
         }
 
         // 9. Push Complete event and mark stream as complete
-        let _ = storage.stream_push_event(&stream_id, ChatEvent::Complete {
+        if let Err(e) = storage.stream_push_event(&stream_id, ChatEvent::Complete {
             new_head: if is_ephemeral { config.head } else { new_head },
             claude_session_id: claude_session_id.unwrap_or_default(),
             usage: Some(ChatUsage {
@@ -1501,8 +1565,12 @@ impl<P: HubContext> ClaudeCode<P> {
                 cost_usd,
                 num_turns,
             }),
-        }).await;
+        }).await {
+            tracing::error!(stream_id = %stream_id, error = %e, "Failed to push event to stream");
+        }
 
-        let _ = storage.stream_set_status(&stream_id, StreamStatus::Complete, None).await;
+        if let Err(e) = storage.stream_set_status(&stream_id, StreamStatus::Complete, None).await {
+            tracing::error!(stream_id = %stream_id, error = %e, "Failed to update stream status");
+        }
     }
 }
