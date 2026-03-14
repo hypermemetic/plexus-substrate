@@ -6,9 +6,53 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
+
+/// Errors from the Claude Code executor
+#[derive(Debug, Error)]
+pub enum ExecutorError {
+    #[error("claude binary not found at '{path}' (searched: {searched})")]
+    BinaryNotFound {
+        path: String,
+        searched: String,
+    },
+
+    #[error("working directory does not exist: '{path}'")]
+    WorkingDirNotFound {
+        path: String,
+    },
+
+    #[error("failed to spawn claude process (binary='{binary}', cwd='{cwd}'): {source}")]
+    SpawnFailed {
+        binary: String,
+        cwd: String,
+        source: std::io::Error,
+    },
+
+    #[error("failed to write MCP config to '{path}': {reason}")]
+    McpConfigWrite {
+        path: String,
+        reason: String,
+    },
+
+    #[error("claude process exited with code {code} (binary='{binary}', cwd='{cwd}'):\n{stderr}")]
+    ProcessFailed {
+        code: String,
+        binary: String,
+        cwd: String,
+        stderr: String,
+    },
+
+    #[error("claude process produced no output (binary='{binary}', cwd='{cwd}', exit_code={code})")]
+    NoOutput {
+        binary: String,
+        cwd: String,
+        code: String,
+    },
+}
 
 /// Configuration for a Claude Code session launch
 #[derive(Debug, Clone)]
@@ -245,6 +289,52 @@ impl ClaudeCodeExecutor {
         };
 
         Box::pin(stream! {
+            // Helper to yield an error Result event
+            macro_rules! yield_error {
+                ($err:expr) => {{
+                    let err: ExecutorError = $err;
+                    tracing::error!(error = %err, "Claude executor error");
+                    yield RawClaudeEvent::Result {
+                        subtype: Some("error".to_string()),
+                        session_id: None,
+                        cost_usd: None,
+                        is_error: Some(true),
+                        duration_ms: None,
+                        num_turns: None,
+                        result: None,
+                        error: Some(err.to_string()),
+                    };
+                }};
+            }
+
+            // Pre-flight: validate binary exists
+            let binary_path = PathBuf::from(&claude_path);
+            if !binary_path.exists() && which::which(&claude_path).is_err() {
+                let searched = [
+                    "~/.claude/local/claude",
+                    "~/.npm/bin/claude",
+                    "~/.bun/bin/claude",
+                    "~/.local/bin/claude",
+                    "/usr/local/bin/claude",
+                    "/opt/homebrew/bin/claude",
+                    "$PATH",
+                ].join(", ");
+                yield_error!(ExecutorError::BinaryNotFound {
+                    path: claude_path.clone(),
+                    searched,
+                });
+                return;
+            }
+
+            // Pre-flight: validate working directory exists
+            let wd_path = PathBuf::from(&working_dir);
+            if !wd_path.exists() {
+                yield_error!(ExecutorError::WorkingDirNotFound {
+                    path: working_dir.clone(),
+                });
+                return;
+            }
+
             // Handle MCP config if present
             let mcp_path = if let Some(ref mcp) = mcp_config {
                 match Self::write_mcp_config_sync(mcp) {
@@ -257,16 +347,10 @@ impl ClaudeCodeExecutor {
                         Some(path)
                     }
                     Err(e) => {
-                        yield RawClaudeEvent::Result {
-                            subtype: Some("error".to_string()),
-                            session_id: None,
-                            cost_usd: None,
-                            is_error: Some(true),
-                            duration_ms: None,
-                            num_turns: None,
-                            result: None,
-                            error: Some(e),
-                        };
+                        yield_error!(ExecutorError::McpConfigWrite {
+                            path: std::env::temp_dir().to_string_lossy().to_string(),
+                            reason: e,
+                        });
                         return;
                     }
                 }
@@ -311,16 +395,11 @@ impl ClaudeCodeExecutor {
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    yield RawClaudeEvent::Result {
-                        subtype: Some("error".to_string()),
-                        session_id: None,
-                        cost_usd: None,
-                        is_error: Some(true),
-                        duration_ms: None,
-                        num_turns: None,
-                        result: None,
-                        error: Some(format!("Failed to spawn claude: {}", e)),
-                    };
+                    yield_error!(ExecutorError::SpawnFailed {
+                        binary: claude_path.clone(),
+                        cwd: working_dir.clone(),
+                        source: e,
+                    });
                     return;
                 }
             };
@@ -398,31 +477,28 @@ impl ClaudeCodeExecutor {
                 );
             }
 
+            let code_str = exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
             let non_zero_exit = exit_code.map_or(true, |c| c != 0);
+
             if non_zero_exit || !got_result {
-                let error_msg = if stderr_lines.is_empty() {
-                    let code_str = exit_code
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    format!("Claude process exited with code {} but produced no output", code_str)
+                let err = if stderr_lines.is_empty() {
+                    ExecutorError::NoOutput {
+                        binary: claude_path.clone(),
+                        cwd: working_dir.clone(),
+                        code: code_str,
+                    }
                 } else {
-                    let stderr_content = stderr_lines.join("\n").trim().to_string();
-                    match exit_code {
-                        Some(c) if c != 0 => format!("Claude process exited with code {}:\n{}", c, stderr_content),
-                        _ => stderr_content,
+                    ExecutorError::ProcessFailed {
+                        code: code_str,
+                        binary: claude_path.clone(),
+                        cwd: working_dir.clone(),
+                        stderr: stderr_lines.join("\n").trim().to_string(),
                     }
                 };
 
-                yield RawClaudeEvent::Result {
-                    subtype: Some("error".to_string()),
-                    session_id: None,
-                    cost_usd: None,
-                    is_error: Some(true),
-                    duration_ms: None,
-                    num_turns: None,
-                    result: None,
-                    error: Some(error_msg),
-                };
+                yield_error!(err);
             }
 
             drop(stderr_lines);
