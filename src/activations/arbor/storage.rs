@@ -74,11 +74,11 @@ impl ArborStorage {
     pub async fn new(config: ArborConfig) -> Result<Self, ArborError> {
         let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
         let connect_options: SqliteConnectOptions = db_url.parse()
-            .map_err(|e| format!("Failed to parse database URL: {}", e))?;
+            .map_err(|e| ArborError::InitError { detail: format!("Failed to parse database URL: {}", e) })?;
         let connect_options = connect_options.disable_statement_logging();
         let pool = SqlitePool::connect_with(connect_options.clone())
             .await
-            .map_err(|e| format!("Failed to connect to database: {}", e))?;
+            .map_err(|e| ArborError::InitError { detail: format!("Failed to connect to database: {}", e) })?;
 
         let storage = Self { pool, config };
         storage.run_migrations().await?;
@@ -161,7 +161,7 @@ impl ArborStorage {
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to run migrations: {}", e))?;
+        .map_err(|e| ArborError::InitError { detail: format!("Failed to run migrations: {}", e) })?;
 
         Ok(())
     }
@@ -259,14 +259,14 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch tree: {}", e))?
-        .ok_or_else(|| format!("Tree not found: {}", tree_id))?;
+        .map_err(|e| ArborError::StorageError { operation: "fetch_tree".to_string(), detail: e.to_string() })?
+        .ok_or_else(|| ArborError::TreeNotFound { tree_id: tree_id.to_string() })?;
 
         let state_str: String = tree_row.get("state");
         let state = ResourceState::from_str(&state_str).unwrap_or(ResourceState::Active);
 
         if !allow_archived && state == ResourceState::Archived {
-            return Err("Tree is archived, use tree_get_archived()".into());
+            return Err(ArborError::InvalidState { message: format!("Tree {} is archived, use tree_get_archived()", tree_id) });
         }
 
         let root_node_id: String = tree_row.get("root_node_id");
@@ -583,14 +583,14 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to fetch tree: {}", e))?
-        .ok_or_else(|| format!("Tree not found: {}", tree_id))?;
+        .map_err(|e| ArborError::StorageError { operation: "fetch_tree".to_string(), detail: e.to_string() })?
+        .ok_or_else(|| ArborError::TreeNotFound { tree_id: tree_id.to_string() })?;
 
         let state_str: String = tree_row.get("state");
         let state = ResourceState::from_str(&state_str).unwrap_or(ResourceState::Active);
 
         if state == ResourceState::Archived {
-            return Err("Cannot claim archived tree".into());
+            return Err(ArborError::InvalidState { message: format!("Cannot claim archived tree {}", tree_id) });
         }
 
         // If scheduled for deletion, reactivate it
@@ -857,7 +857,7 @@ impl ArborStorage {
         nodes
             .get(node_id)
             .cloned()
-            .ok_or_else(|| format!("Node not found: {}", node_id).into())
+            .ok_or_else(|| ArborError::NodeNotFound { node_id: node_id.to_string(), tree_id: tree_id.to_string() })
     }
 
     /// Get children of a node
@@ -900,8 +900,8 @@ impl ArborStorage {
         .bind(node_id.to_string())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch parent: {}", e))?
-        .ok_or_else(|| format!("Node not found: {}", node_id))?;
+        .map_err(|e| ArborError::StorageError { operation: "fetch_parent".to_string(), detail: e.to_string() })?
+        .ok_or_else(|| ArborError::NodeNotFound { node_id: node_id.to_string(), tree_id: tree_id.to_string() })?;
 
         let parent_id: Option<String> = row.get("parent_id");
         match parent_id {
@@ -976,7 +976,7 @@ impl ArborStorage {
                 nodes
                     .get(id)
                     .cloned()
-                    .ok_or_else(|| format!("Node not found in path: {}", id).into())
+                    .ok_or_else(|| ArborError::NodeNotFound { node_id: id.to_string(), tree_id: tree_id.to_string() })
             })
             .collect();
 

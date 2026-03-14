@@ -1,4 +1,4 @@
-use super::types::{ApprovalId, ApprovalRequest, ApprovalStatus};
+use super::types::{ApprovalId, ApprovalRequest, ApprovalStatus, LoopbackError};
 use serde_json::Value;
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, ConnectOptions, Row};
 use std::collections::HashMap;
@@ -28,15 +28,15 @@ pub struct LoopbackStorage {
 }
 
 impl LoopbackStorage {
-    pub async fn new(config: LoopbackStorageConfig) -> Result<Self, String> {
+    pub async fn new(config: LoopbackStorageConfig) -> Result<Self, LoopbackError> {
         let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
         let options: SqliteConnectOptions = db_url.parse()
-            .map_err(|e| format!("Failed to parse DB URL: {}", e))?;
+            .map_err(|e: sqlx::Error| LoopbackError::Storage { operation: "parse_db_url", detail: e.to_string() })?;
         let options = options.disable_statement_logging();
 
         let pool = SqlitePool::connect_with(options)
             .await
-            .map_err(|e| format!("Failed to connect: {}", e))?;
+            .map_err(|e| LoopbackError::Storage { operation: "connect", detail: e.to_string() })?;
 
         let storage = Self {
             pool,
@@ -67,7 +67,7 @@ impl LoopbackStorage {
         }
     }
 
-    async fn run_migrations(&self) -> Result<(), String> {
+    async fn run_migrations(&self) -> Result<(), LoopbackError> {
         sqlx::query(r#"
             CREATE TABLE IF NOT EXISTS loopback_approvals (
                 id TEXT PRIMARY KEY,
@@ -85,7 +85,7 @@ impl LoopbackStorage {
         "#)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Migration failed: {}", e))?;
+        .map_err(|e| LoopbackError::Storage { operation: "migration", detail: e.to_string() })?;
         Ok(())
     }
 
@@ -95,11 +95,11 @@ impl LoopbackStorage {
         tool_name: &str,
         tool_use_id: &str,
         input: &Value,
-    ) -> Result<ApprovalRequest, String> {
+    ) -> Result<ApprovalRequest, LoopbackError> {
         let id = Uuid::new_v4();
         let now = current_timestamp();
         let input_json = serde_json::to_string(input)
-            .map_err(|e| format!("Failed to serialize input: {}", e))?;
+            .map_err(|e| LoopbackError::Serialization { detail: e.to_string() })?;
 
         sqlx::query(
             "INSERT INTO loopback_approvals (id, session_id, tool_name, tool_use_id, input, status, created_at)
@@ -113,7 +113,7 @@ impl LoopbackStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create approval: {}", e))?;
+        .map_err(|e| LoopbackError::Storage { operation: "create_approval", detail: e.to_string() })?;
 
         Ok(ApprovalRequest {
             id,
@@ -128,7 +128,7 @@ impl LoopbackStorage {
         })
     }
 
-    pub async fn get_approval(&self, id: &ApprovalId) -> Result<ApprovalRequest, String> {
+    pub async fn get_approval(&self, id: &ApprovalId) -> Result<ApprovalRequest, LoopbackError> {
         let row = sqlx::query(
             "SELECT id, session_id, tool_name, tool_use_id, input, status, response_message, created_at, resolved_at
              FROM loopback_approvals WHERE id = ?"
@@ -136,8 +136,8 @@ impl LoopbackStorage {
         .bind(id.to_string())
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch approval: {}", e))?
-        .ok_or_else(|| format!("Approval not found: {}", id))?;
+        .map_err(|e| LoopbackError::Storage { operation: "get_approval", detail: e.to_string() })?
+        .ok_or_else(|| LoopbackError::ApprovalNotFound { id: id.to_string() })?;
 
         self.row_to_approval(row)
     }
@@ -147,7 +147,7 @@ impl LoopbackStorage {
         id: &ApprovalId,
         approved: bool,
         message: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), LoopbackError> {
         let now = current_timestamp();
         let status = if approved { "approved" } else { "denied" };
 
@@ -160,10 +160,10 @@ impl LoopbackStorage {
         .bind(id.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to resolve approval: {}", e))?;
+        .map_err(|e| LoopbackError::Storage { operation: "resolve_approval", detail: e.to_string() })?;
 
         if result.rows_affected() == 0 {
-            return Err(format!("Approval not found: {}", id));
+            return Err(LoopbackError::ApprovalNotFound { id: id.to_string() });
         }
         Ok(())
     }
@@ -183,7 +183,7 @@ impl LoopbackStorage {
         }
     }
 
-    pub async fn list_pending(&self, session_id: Option<&str>) -> Result<Vec<ApprovalRequest>, String> {
+    pub async fn list_pending(&self, session_id: Option<&str>) -> Result<Vec<ApprovalRequest>, LoopbackError> {
         let rows = if let Some(sid) = session_id {
             sqlx::query(
                 "SELECT id, session_id, tool_name, tool_use_id, input, status, response_message, created_at, resolved_at
@@ -200,12 +200,12 @@ impl LoopbackStorage {
             .fetch_all(&self.pool)
             .await
         }
-        .map_err(|e| format!("Failed to list pending: {}", e))?;
+        .map_err(|e| LoopbackError::Storage { operation: "list_pending", detail: e.to_string() })?;
 
         rows.into_iter().map(|r| self.row_to_approval(r)).collect()
     }
 
-    fn row_to_approval(&self, row: sqlx::sqlite::SqliteRow) -> Result<ApprovalRequest, String> {
+    fn row_to_approval(&self, row: sqlx::sqlite::SqliteRow) -> Result<ApprovalRequest, LoopbackError> {
         let id_str: String = row.get("id");
         let input_json: String = row.get("input");
         let status_str: String = row.get("status");
@@ -219,7 +219,7 @@ impl LoopbackStorage {
         };
 
         Ok(ApprovalRequest {
-            id: Uuid::parse_str(&id_str).map_err(|e| format!("Invalid UUID: {}", e))?,
+            id: Uuid::parse_str(&id_str).map_err(|e| LoopbackError::InvalidData { detail: format!("Invalid UUID '{}': {}", id_str, e) })?,
             session_id: row.get("session_id"),
             tool_name: row.get("tool_name"),
             tool_use_id: row.get("tool_use_id"),
