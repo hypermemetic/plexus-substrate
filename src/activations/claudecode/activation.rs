@@ -195,7 +195,8 @@ impl<P: HubContext> ClaudeCode<P> {
         params(
             name = "Session name to chat with",
             prompt = "User message / prompt to send",
-            ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
+            ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion",
+            allowed_tools = "Optional list of tools to allow (e.g. [\"WebSearch\", \"Read\"])"
         )
     )]
     pub async fn chat(
@@ -203,6 +204,7 @@ impl<P: HubContext> ClaudeCode<P> {
         name: String,
         prompt: String,
         ephemeral: Option<bool>,
+        allowed_tools: Option<Vec<String>>,
     ) -> impl Stream<Item = ChatEvent> + Send + 'static {
         let storage = self.storage.clone();
         let executor = self.executor.clone();
@@ -321,6 +323,7 @@ impl<P: HubContext> ClaudeCode<P> {
                 } else {
                     None
                 },
+                allowed_tools: allowed_tools.unwrap_or_default(),
                 ..Default::default()
             };
 
