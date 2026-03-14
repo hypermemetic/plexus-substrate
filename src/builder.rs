@@ -6,7 +6,6 @@ use std::sync::{Arc, Weak};
 
 use crate::activations::arbor::{Arbor, ArborConfig};
 use crate::activations::bash::Bash;
-use crate::activations::changelog::{Changelog, ChangelogStorageConfig};
 use crate::activations::claudecode::{ClaudeCode, ClaudeCodeStorage, ClaudeCodeStorageConfig};
 use crate::activations::claudecode_loopback::{ClaudeCodeLoopback, LoopbackStorageConfig};
 use crate::activations::cone::{Cone, ConeStorageConfig};
@@ -65,11 +64,6 @@ pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
         .await
         .expect("Failed to initialize Mustache");
 
-    // Initialize Changelog for tracking Plexus RPC server changes
-    let changelog = Changelog::new(ChangelogStorageConfig::default())
-        .await
-        .expect("Failed to initialize Changelog");
-
     // Initialize ClaudeCode Loopback for tool permission routing
     let loopback = ClaudeCodeLoopback::new(LoopbackStorageConfig::default())
         .await
@@ -101,30 +95,12 @@ pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
             .register(cone)
             .register(claudecode)
             .register(mustache)
-            .register(changelog.clone())
             .register(loopback)
             // .register(jsexec)  // temporarily disabled
             .register(registry)
             .register(Interactive::new())  // Bidirectional demo activation
             .register_hub(Solar::new())
     });
-
-    // Run changelog startup check
-    let plexus_hash = hub.compute_hash();
-    match changelog.startup_check(&plexus_hash).await {
-        Ok((hash_changed, is_documented, message)) => {
-            if hash_changed && !is_documented {
-                tracing::error!("{}", message);
-            } else if hash_changed {
-                tracing::info!("{}", message);
-            } else {
-                tracing::debug!("{}", message);
-            }
-        }
-        Err(e) => {
-            tracing::error!("Changelog startup check failed: {}", e);
-        }
-    }
 
     hub
 }
