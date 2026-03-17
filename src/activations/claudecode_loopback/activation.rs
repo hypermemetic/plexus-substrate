@@ -55,27 +55,35 @@ impl ClaudeCodeLoopback {
     #[plexus_macros::hub_method(params(
         tool_name = "Name of the tool being requested",
         tool_use_id = "Unique ID for this tool invocation",
-        input = "Tool input parameters"
+        input = "Tool input parameters",
+        _connection = "HTTP connection metadata (optional)" // Added for transparent query param forwarding
     ))]
     async fn permit(
         &self,
         tool_name: String,
         tool_use_id: String,
         input: Value,
+        _connection: Option<Value>,
     ) -> impl Stream<Item = String> + Send + 'static {
         // IMMEDIATE DEBUG: Log before stream starts
-        eprintln!("[LOOPBACK] permit called: tool={}, tool_use_id={}", tool_name, tool_use_id);
+        tracing::debug!("[LOOPBACK] permit called: tool={}, tool_use_id={}", tool_name, tool_use_id);
 
         let storage = self.storage.clone();
 
-        // Look up session ID from pre-registered tool_use_id mapping
-        // This mapping was set by run_chat_background when it saw the ToolUse event
-        let session_id = storage.lookup_session_by_tool(&tool_use_id)
+        // Try to get session_id from HTTP connection metadata first (transparent approach).
+        // If not available, fall back to tool_use_id mapping (legacy approach).
+        let session_id = _connection
+            .as_ref()
+            .and_then(|conn| conn.get("query.session_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("PLEXUS_SESSION_ID").ok())
+            .or_else(|| storage.lookup_session_by_tool(&tool_use_id))
             .unwrap_or_else(|| "unknown".to_string());
 
         stream! {
             // DEBUG: Log the lookup result
-            eprintln!("[LOOPBACK] permit: tool_use_id={} mapped to session_id={}", tool_use_id, session_id);
+            tracing::debug!("[LOOPBACK] permit: tool_use_id={} mapped to session_id={}", tool_use_id, session_id);
 
             // Create approval request
             let approval = match storage.create_approval(
@@ -207,6 +215,78 @@ impl ClaudeCodeLoopback {
                 }
                 Err(e) => {
                     yield PendingResult::Err { message: e.to_string() };
+                }
+            }
+        }
+    }
+
+    /// Wait for a new approval request to arrive for a session
+    ///
+    /// This method blocks until a new approval arrives or the timeout is reached.
+    /// Unlike `pending` which returns a snapshot, this waits for new approvals
+    /// and returns immediately when one arrives.
+    ///
+    /// Use case: Claude Code can call this once and block, eliminating polling overhead.
+    #[plexus_macros::hub_method(params(
+        session_id = "Session ID to wait for approvals",
+        timeout_secs = "Optional timeout in seconds (default: 300 = 5 minutes)"
+    ))]
+    async fn wait_for_approval(
+        &self,
+        session_id: String,
+        timeout_secs: Option<u64>,
+    ) -> impl Stream<Item = WaitForApprovalResult> + Send + 'static {
+        let storage = self.storage.clone();
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300));
+
+        stream! {
+            // Get or create notifier for this session
+            let notifier = storage.get_or_create_notifier(&session_id);
+
+            // Record start time for timeout
+            let start = std::time::Instant::now();
+
+            loop {
+                // First check if there are already pending approvals
+                match storage.list_pending(Some(&session_id)).await {
+                    Ok(approvals) if !approvals.is_empty() => {
+                        // Found pending approval(s), return immediately
+                        yield WaitForApprovalResult::Ok { approvals };
+                        return;
+                    }
+                    Err(e) => {
+                        yield WaitForApprovalResult::Err {
+                            message: format!("Failed to check pending approvals: {}", e)
+                        };
+                        return;
+                    }
+                    _ => {
+                        // No pending approvals, continue to wait
+                    }
+                }
+
+                // Check if we've exceeded timeout
+                if start.elapsed() >= timeout {
+                    yield WaitForApprovalResult::Timeout {
+                        message: format!("No approval received within {} seconds", timeout.as_secs())
+                    };
+                    return;
+                }
+
+                // Wait for notification or timeout
+                // Use tokio::select! to race between notification and timeout
+                tokio::select! {
+                    _ = notifier.notified() => {
+                        // New approval arrived, loop will check pending again
+                        continue;
+                    }
+                    _ = sleep(timeout.saturating_sub(start.elapsed())) => {
+                        // Timeout reached
+                        yield WaitForApprovalResult::Timeout {
+                            message: format!("No approval received within {} seconds", timeout.as_secs())
+                        };
+                        return;
+                    }
                 }
             }
         }

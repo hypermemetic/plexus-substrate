@@ -161,7 +161,8 @@ impl<P: HubContext> ClaudeCode<P> {
         working_dir = "Working directory for Claude Code",
         model = "Model to use (opus, sonnet, haiku)",
         system_prompt = "Optional system prompt / instructions",
-        loopback_enabled = "Enable loopback mode - routes tool permissions through parent for approval"
+        loopback_enabled = "Enable loopback mode - routes tool permissions through parent for approval",
+        loopback_session_id = "Session ID for loopback MCP URL correlation (e.g., orcha-xxx-claude-yyy)"
     ))]
     pub async fn create(
         &self,
@@ -170,6 +171,7 @@ impl<P: HubContext> ClaudeCode<P> {
         model: Model,
         system_prompt: Option<String>,
         loopback_enabled: Option<bool>,
+        loopback_session_id: Option<String>,
     ) -> impl Stream<Item = CreateResult> + Send + 'static {
         let storage = self.storage.clone();
         let loopback = loopback_enabled.unwrap_or(false);
@@ -189,7 +191,18 @@ impl<P: HubContext> ClaudeCode<P> {
                 }
             };
 
-            match storage.session_create(name, working_dir, model, system_prompt, None, loopback, None).await {
+            // Fail fast: if loopback is requested, the MCP server must be reachable.
+            // Without it Claude cannot resolve the permission-prompt tool and will
+            // return empty output instead of an error.
+            if loopback {
+                if let Err(e) = super::executor::check_mcp_reachable().await {
+                    yield CreateResult::Err { message: e };
+                    return;
+                }
+            }
+
+            // claude_session_id is None initially; populated after first chat with real Claude UUID
+            match storage.session_create(name, working_dir, model, system_prompt, None, loopback, None, loopback_session_id, None).await {
                 Ok(config) => {
                     yield CreateResult::Ok {
                         id: config.id,
@@ -325,6 +338,7 @@ impl<P: HubContext> ClaudeCode<P> {
             // 5. Build launch config
             let launch_config = LaunchConfig {
                 query: prompt,
+                // Use stored Claude UUID for --resume (None on first call = new session)
                 session_id: config.claude_session_id.clone(),
                 fork_session: false,
                 model: config.model,
@@ -332,8 +346,9 @@ impl<P: HubContext> ClaudeCode<P> {
                 system_prompt: config.system_prompt.clone(),
                 mcp_config: config.mcp_config.clone(),
                 loopback_enabled: config.loopback_enabled,
+                // Use loopback_session_id for MCP URL correlation (e.g., orcha-xxx-claude-yyy)
                 loopback_session_id: if config.loopback_enabled {
-                    Some(session_id.to_string())
+                    config.loopback_session_id.clone()
                 } else {
                     None
                 },
@@ -342,6 +357,7 @@ impl<P: HubContext> ClaudeCode<P> {
             };
 
             // 6. Launch Claude and stream events
+            let prev_claude_session_id = config.claude_session_id.clone();
             let mut response_content = String::new();
             let mut claude_session_id = config.claude_session_id.clone();
             let mut cost_usd = None;
@@ -529,6 +545,26 @@ impl<P: HubContext> ClaudeCode<P> {
                     RawClaudeEvent::User { .. } => {
                         // User events are echoed back but we don't need to process them
                     }
+                    RawClaudeEvent::LaunchCommand { command } => {
+                        let event = NodeEvent::LaunchCommand { command };
+                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                            current_parent = node_id;
+                        }
+                    }
+                    RawClaudeEvent::Stderr { text } => {
+                        tracing::warn!(stderr = %text, "Claude stderr");
+                        let event = NodeEvent::ClaudeStderr { text };
+                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                            current_parent = node_id;
+                        }
+                    }
+                }
+            }
+
+            // 6b. If we captured a new Claude session UUID, persist it for future --resume
+            if let Some(ref new_id) = claude_session_id {
+                if prev_claude_session_id.as_deref() != Some(new_id.as_str()) {
+                    let _ = storage.session_update_claude_id(&session_id, new_id.clone()).await;
                 }
             }
 
@@ -726,7 +762,9 @@ impl<P: HubContext> ClaudeCode<P> {
                 parent.system_prompt.clone(),
                 parent.mcp_config.clone(),
                 parent.loopback_enabled,
-                None,
+                None, // claude_session_id - will be set on first chat with fork_session=true
+                None, // loopback_session_id
+                None, // metadata
             ).await {
                 Ok(mut c) => {
                     // Update head to parent's position (share the same tree point)
@@ -1237,8 +1275,9 @@ impl<P: HubContext> ClaudeCode<P> {
             system_prompt: config.system_prompt.clone(),
             mcp_config: config.mcp_config.clone(),
             loopback_enabled: config.loopback_enabled,
+            // Use claude_session_id for MCP URL transparency (e.g., orcha-xxx)
             loopback_session_id: if config.loopback_enabled {
-                Some(session_id.to_string())
+                config.claude_session_id.clone()
             } else {
                 None
             },
@@ -1462,6 +1501,19 @@ impl<P: HubContext> ClaudeCode<P> {
                     }
                 }
                 RawClaudeEvent::User { .. } => {}
+                RawClaudeEvent::LaunchCommand { command } => {
+                    let event = NodeEvent::LaunchCommand { command };
+                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                        current_parent = node_id;
+                    }
+                }
+                RawClaudeEvent::Stderr { text } => {
+                    tracing::warn!(stderr = %text, "Claude stderr");
+                    let event = NodeEvent::ClaudeStderr { text };
+                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                        current_parent = node_id;
+                    }
+                }
             }
         }
 

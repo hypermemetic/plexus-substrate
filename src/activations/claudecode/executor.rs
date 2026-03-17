@@ -8,23 +8,13 @@ use std::process::Stdio;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
 /// Errors from the Claude Code executor
 #[derive(Debug, Error)]
 pub enum ExecutorError {
-    #[error("claude binary not found at '{path}' (searched: {searched})")]
-    BinaryNotFound {
-        path: String,
-        searched: String,
-    },
-
-    #[error("working directory does not exist: '{path}'")]
-    WorkingDirNotFound {
-        path: String,
-    },
-
     #[error("failed to spawn claude process (binary='{binary}', cwd='{cwd}'): {source}")]
     SpawnFailed {
         binary: String,
@@ -37,21 +27,53 @@ pub enum ExecutorError {
         path: String,
         reason: String,
     },
+}
 
-    #[error("claude process exited with code {code} (binary='{binary}', cwd='{cwd}'):\n{stderr}")]
-    ProcessFailed {
-        code: String,
-        binary: String,
-        cwd: String,
-        stderr: String,
-    },
+// ─── MCP Reachability Check ───────────────────────────────────────────────────
 
-    #[error("claude process produced no output (binary='{binary}', cwd='{cwd}', exit_code={code})")]
-    NoOutput {
-        binary: String,
-        cwd: String,
-        code: String,
-    },
+/// Extract `host:port` from a URL like `http://127.0.0.1:4444/mcp`.
+fn mcp_host_port_from_url(url: &str) -> String {
+    let without_scheme = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host_port = without_scheme.split('/').next().unwrap_or("127.0.0.1:4444");
+    if host_port.contains(':') {
+        host_port.to_string()
+    } else {
+        format!("{}:4444", host_port)
+    }
+}
+
+/// Check that the Plexus MCP server is reachable via TCP.
+///
+/// Reads `PLEXUS_MCP_URL` (default `http://127.0.0.1:4444/mcp`) to determine
+/// the host:port.  Attempts a TCP connect with a 2-second timeout.
+///
+/// Returns an actionable error message if the server is not reachable, so
+/// callers can fail fast before spawning Claude with a broken MCP config.
+pub async fn check_mcp_reachable() -> Result<(), String> {
+    let url = std::env::var("PLEXUS_MCP_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:4444/mcp".to_string());
+    let addr = mcp_host_port_from_url(&url);
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        TcpStream::connect(&addr),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!(
+            "MCP server not reachable at {} ({}). \
+             Start the substrate without --no-mcp so the permission-prompt tool is available.",
+            url, e
+        )),
+        Err(_) => Err(format!(
+            "MCP server connection timed out at {}. \
+             Start the substrate without --no-mcp so the permission-prompt tool is available.",
+            url
+        )),
+    }
 }
 
 /// Configuration for a Claude Code session launch
@@ -242,7 +264,7 @@ impl ClaudeCodeExecutor {
         // Build MCP config - merge loopback config if enabled
         let mcp_config = if loopback_enabled {
             let base_url = std::env::var("PLEXUS_MCP_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:4445/mcp".to_string());
+                .unwrap_or_else(|_| "http://127.0.0.1:4444/mcp".to_string());
 
             // Include session_id in URL for correlation when loopback_permit is called
             let plexus_url = if let Some(ref sid) = loopback_session_id {
@@ -251,14 +273,28 @@ impl ClaudeCodeExecutor {
                 base_url
             };
 
-            let loopback_mcp = serde_json::json!({
-                "mcpServers": {
-                    "plexus": {
-                        "type": "http",
-                        "url": plexus_url
+            let loopback_mcp = if let Some(ref sid) = loopback_session_id {
+                serde_json::json!({
+                    "mcpServers": {
+                        "plexus": {
+                            "type": "http",
+                            "url": plexus_url
+                        }
+                    },
+                    "env": {
+                        "PLEXUS_SESSION_ID": sid
                     }
-                }
-            });
+                })
+            } else {
+                serde_json::json!({
+                    "mcpServers": {
+                        "plexus": {
+                            "type": "http",
+                            "url": plexus_url
+                        }
+                    }
+                })
+            };
 
             // Merge with existing config if present
             match config.mcp_config {
@@ -289,7 +325,6 @@ impl ClaudeCodeExecutor {
         };
 
         Box::pin(stream! {
-            // Helper to yield an error Result event
             macro_rules! yield_error {
                 ($err:expr) => {{
                     let err: ExecutorError = $err;
@@ -307,32 +342,23 @@ impl ClaudeCodeExecutor {
                 }};
             }
 
-            // Pre-flight: validate binary exists
-            let binary_path = PathBuf::from(&claude_path);
-            if !binary_path.exists() && which::which(&claude_path).is_err() {
-                let searched = [
-                    "~/.claude/local/claude",
-                    "~/.npm/bin/claude",
-                    "~/.bun/bin/claude",
-                    "~/.local/bin/claude",
-                    "/usr/local/bin/claude",
-                    "/opt/homebrew/bin/claude",
-                    "$PATH",
-                ].join(", ");
-                yield_error!(ExecutorError::BinaryNotFound {
-                    path: claude_path.clone(),
-                    searched,
-                });
-                return;
-            }
-
-            // Pre-flight: validate working directory exists
-            let wd_path = PathBuf::from(&working_dir);
-            if !wd_path.exists() {
-                yield_error!(ExecutorError::WorkingDirNotFound {
-                    path: working_dir.clone(),
-                });
-                return;
+            // Fail fast if loopback is enabled but the MCP server is not reachable.
+            // Without a live MCP server Claude cannot call the permission-prompt tool
+            // and will return empty output (silent failure).
+            if loopback_enabled {
+                if let Err(e) = check_mcp_reachable().await {
+                    yield RawClaudeEvent::Result {
+                        subtype: Some("error".to_string()),
+                        session_id: None,
+                        cost_usd: None,
+                        is_error: Some(true),
+                        duration_ms: None,
+                        num_turns: None,
+                        result: None,
+                        error: Some(e),
+                    };
+                    return;
+                }
             }
 
             // Handle MCP config if present
@@ -374,21 +400,24 @@ impl ClaudeCodeExecutor {
                     .join(" ")
             );
 
-            // Debug: log the command being executed
             tracing::debug!(cmd = %shell_cmd, "Launching Claude Code");
-            eprintln!("[DEBUG] Claude command: {}", shell_cmd);
+
+            // Emit the launch command as an event (captured in arbor for debugging)
+            yield RawClaudeEvent::LaunchCommand { command: shell_cmd.clone() };
 
             let mut cmd = Command::new("bash");
             cmd.args(&["-c", &shell_cmd])
                 .current_dir(&working_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .stdin(Stdio::null());
+                .stdin(Stdio::null())
+                // Unset CLAUDECODE so nested Claude sessions are allowed
+                .env_remove("CLAUDECODE");
 
             // Set loopback session ID env var if loopback is enabled
             if loopback_enabled {
                 if let Some(ref session_id) = loopback_session_id {
-                    cmd.env("LOOPBACK_SESSION_ID", session_id);
+                    cmd.env("PLEXUS_SESSION_ID", session_id);
                 }
             }
 
@@ -421,8 +450,6 @@ impl ClaudeCodeExecutor {
                 }
             });
 
-            let mut got_result = false;
-
             // Stream events from stdout
             while let Ok(Some(line)) = reader.next_line().await {
                 if line.trim().is_empty() {
@@ -432,9 +459,6 @@ impl ClaudeCodeExecutor {
                 match serde_json::from_str::<RawClaudeEvent>(&line) {
                     Ok(event) => {
                         let is_result = matches!(event, RawClaudeEvent::Result { .. });
-                        if is_result {
-                            got_result = true;
-                        }
                         yield event;
                         if is_result {
                             break;
@@ -462,46 +486,18 @@ impl ClaudeCodeExecutor {
                 }
             }
 
-            // Cleanup: capture exit status and surface errors
-            let exit_status = child.wait().await;
-            let exit_code = exit_status.as_ref().ok().and_then(|s| s.code());
-
-            tracing::debug!(exit_code = ?exit_code, "Claude process exited");
-
-            let stderr_lines = stderr_buffer.lock().await;
-            if !stderr_lines.is_empty() {
-                tracing::warn!(
-                    stderr_line_count = stderr_lines.len(),
-                    stderr_preview = %stderr_lines.join("\n"),
-                    "Claude process produced stderr output"
-                );
+            // Drain stderr and emit as events (captures error messages from Claude)
+            if let Some(stderr) = child.stderr.take() {
+                let mut stderr_reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    if !line.trim().is_empty() {
+                        yield RawClaudeEvent::Stderr { text: line };
+                    }
+                }
             }
 
-            let code_str = exit_code
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let non_zero_exit = exit_code.map_or(true, |c| c != 0);
-
-            if non_zero_exit || !got_result {
-                let err = if stderr_lines.is_empty() {
-                    ExecutorError::NoOutput {
-                        binary: claude_path.clone(),
-                        cwd: working_dir.clone(),
-                        code: code_str,
-                    }
-                } else {
-                    ExecutorError::ProcessFailed {
-                        code: code_str,
-                        binary: claude_path.clone(),
-                        cwd: working_dir.clone(),
-                        stderr: stderr_lines.join("\n").trim().to_string(),
-                    }
-                };
-
-                yield_error!(err);
-            }
-
-            drop(stderr_lines);
+            // Cleanup
+            let _ = child.wait().await;
 
             if let Some(path) = mcp_path {
                 let _ = tokio::fs::remove_file(path).await;

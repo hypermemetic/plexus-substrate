@@ -1,3 +1,4 @@
+pub use crate::activations::lattice::GatherStrategy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -26,6 +27,22 @@ impl From<String> for OrchaError {
     fn from(detail: String) -> Self {
         OrchaError::OrchestrationError { detail }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Orcha Node Kind — typed dispatch
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Typed Orcha node payload — serialized into NodeSpec::Task { data }.
+/// graph_runner deserializes this to dispatch to the correct executor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "orcha_type", rename_all = "snake_case")]
+pub enum OrchaNodeKind {
+    Task { task: String, #[serde(default)] max_retries: Option<u8> },
+    Synthesize { task: String, #[serde(default)] max_retries: Option<u8> },
+    Validate { command: String, cwd: Option<String>, #[serde(default)] max_retries: Option<u8> },
+    Review { prompt: String },
+    Plan { task: String },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,6 +108,8 @@ pub struct SessionInfo {
     pub agent_mode: AgentMode,
     /// Primary agent ID (if in multi mode)
     pub primary_agent_id: Option<AgentId>,
+    /// Arbor tree ID for tracking orchestration events
+    pub tree_id: Option<String>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -133,6 +152,16 @@ pub struct RunTaskRequest {
     /// Show Claude's output and tool use (default: false)
     #[serde(default)]
     pub verbose: bool,
+    /// Enable automatic approval via Haiku decision agent (default: true)
+    ///
+    /// When true, spawns ephemeral Haiku session to judge each approval.
+    /// When false, approvals must be handled manually via orcha.approve_request.
+    #[serde(default = "default_auto_approve")]
+    pub auto_approve: bool,
+}
+
+fn default_auto_approve() -> bool {
+    false
 }
 
 fn default_cwd() -> String {
@@ -206,6 +235,64 @@ pub struct RespondApprovalRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RespondApprovalResult {
     Ok,
+    Err {
+        message: String,
+    },
+}
+
+/// Request to list pending approvals for a session
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListApprovalsRequest {
+    pub session_id: SessionId,
+}
+
+/// Information about a pending approval request
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ApprovalInfo {
+    pub approval_id: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub tool_use_id: String,
+    pub tool_input: serde_json::Value,
+    pub created_at: String, // ISO 8601 timestamp
+}
+
+/// Result of listing pending approvals
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ListApprovalsResult {
+    Ok {
+        approvals: Vec<ApprovalInfo>,
+    },
+    Err {
+        message: String,
+    },
+}
+
+/// Request to approve a pending request
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ApproveRequest {
+    pub approval_id: String,
+    /// Optional message explaining approval decision
+    pub message: Option<String>,
+}
+
+/// Request to deny a pending request
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DenyRequest {
+    pub approval_id: String,
+    /// Reason for denial (shown to agent)
+    pub reason: Option<String>,
+}
+
+/// Result of approving or denying a request
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ApprovalActionResult {
+    Ok {
+        approval_id: String,
+        message: Option<String>,
+    },
     Err {
         message: String,
     },
@@ -438,6 +525,73 @@ pub enum OrchaEvent {
         subtask: String,
         error: String,
     },
+
+    /// Graph execution has started
+    GraphStarted {
+        graph_id: String,
+    },
+
+    /// A node is ready and has been dispatched for execution
+    NodeStarted {
+        node_id: String,
+        label: Option<String>,
+        /// Ticket ID (e.g. "CALC-1") if this node was built from a ticket definition
+        ticket_id: Option<String>,
+        /// Completion percentage before this node started (complete_nodes / total_nodes * 100)
+        percentage: Option<u32>,
+    },
+
+    /// A node completed successfully
+    NodeComplete {
+        node_id: String,
+        label: Option<String>,
+        /// Ticket ID (e.g. "CALC-1") if this node was built from a ticket definition
+        ticket_id: Option<String>,
+        output_summary: Option<String>,
+        /// Completion percentage after this node finished (complete_nodes / total_nodes * 100)
+        percentage: Option<u32>,
+    },
+
+    /// A node failed
+    NodeFailed {
+        node_id: String,
+        label: Option<String>,
+        /// Ticket ID (e.g. "CALC-1") if this node was built from a ticket definition
+        ticket_id: Option<String>,
+        error: String,
+        /// Completion percentage after this node failed (complete_nodes / total_nodes * 100)
+        percentage: Option<u32>,
+    },
+
+    /// A validate node is retrying after a failed validation attempt
+    Retrying {
+        node_id: String,
+        ticket_id: Option<String>,
+        attempt: usize,
+        max_attempts: usize,
+        error: String,
+    },
+
+    /// Live output chunk from a node during execution
+    NodeOutput {
+        node_id: String,
+        ticket_id: Option<String>,
+        chunk: String,
+    },
+
+    /// Graph was cancelled via cancel_graph
+    Cancelled {
+        graph_id: String,
+    },
+
+    /// A pending approval request is waiting for a human decision
+    ApprovalPending {
+        approval_id: String,
+        graph_id: String,
+        tool_name: String,
+        tool_input: serde_json::Value,
+        created_at: String,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -593,4 +747,61 @@ pub struct AgentSummary {
     pub subtask: String,
     pub state: AgentState,
     pub summary: String,  // AI-generated summary of this agent's work
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Graph Builder Result Types
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OrchaCreateGraphResult {
+    Ok { graph_id: String },
+    Err { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OrchaAddNodeResult {
+    Ok { node_id: String },
+    Err { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OrchaAddDependencyResult {
+    Ok,
+    Err { message: String },
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Inline Graph Definition Types (for run_graph_definition)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Typed node spec in Orcha vocabulary — no raw NodeSpec JSON needed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OrchaNodeSpec {
+    Task { task: String, #[serde(default)] max_retries: Option<u8> },
+    Synthesize { task: String, #[serde(default)] max_retries: Option<u8> },
+    Validate { command: String, cwd: Option<String>, #[serde(default)] max_retries: Option<u8> },
+    Gather { strategy: GatherStrategy },
+    Review { prompt: String },
+    Plan { task: String },
+}
+
+/// One node in an inline graph definition.
+/// `id` is a caller-supplied stable label used in OrchaEdgeDef.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OrchaNodeDef {
+    pub id: String,
+    pub spec: OrchaNodeSpec,
+}
+
+/// One edge in an inline graph definition.
+/// `from`/`to` reference OrchaNodeDef.id values.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OrchaEdgeDef {
+    pub from: String,
+    pub to: String,
 }

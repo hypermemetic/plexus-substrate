@@ -1,3 +1,9 @@
+// Common storage utilities for activations
+pub mod storage;
+
+// Chaos provides fault injection and observability for anti-fragility testing
+pub mod chaos;
+
 // Health is the reference implementation for the new architecture (manual impl)
 pub mod health;
 
@@ -25,5 +31,14 @@ pub mod mustache;
 // ClaudeCode Loopback routes tool permissions back to parent for approval
 pub mod claudecode_loopback;
 
+// Orcha orchestrates Claude sub-agents with approval loops and validation
+pub mod orcha;
+
 // Interactive demonstrates bidirectional communication patterns
 pub mod interactive;
+
+// Lattice is a DAG execution engine for multi-agent orchestration
+pub mod lattice;
+
+// Changelog tracks plexus hash transitions and planned changes
+pub mod changelog;

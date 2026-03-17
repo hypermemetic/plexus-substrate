@@ -1,5 +1,7 @@
 use super::types::{SessionId, SessionInfo, SessionState};
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, ConnectOptions, Row};
+use crate::activations::storage::init_sqlite_pool;
+use crate::activation_db_path_from_module;
+use sqlx::{sqlite::SqlitePool, Row};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +16,7 @@ pub struct OrchaStorageConfig {
 impl Default for OrchaStorageConfig {
     fn default() -> Self {
         Self {
-            db_path: PathBuf::from("orcha.db"),
+            db_path: activation_db_path_from_module!("orcha.db"),
         }
     }
 }
@@ -29,15 +31,8 @@ pub struct OrchaStorage {
 impl OrchaStorage {
     /// Create new storage with the given configuration
     pub async fn new(config: OrchaStorageConfig) -> Result<Self, String> {
-        let db_url = format!("sqlite://{}", config.db_path.display());
-        let options = db_url
-            .parse::<SqliteConnectOptions>()
-            .map_err(|e| format!("Failed to parse DB URL: {}", e))?;
-        let options = options.disable_statement_logging();
+        let pool = init_sqlite_pool(config.db_path).await?;
 
-        let pool = SqlitePool::connect_with(options)
-            .await
-            .map_err(|e| format!("Failed to connect: {}", e))?;
         let storage = Self {
             pool,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -107,6 +102,14 @@ impl OrchaStorage {
                 .map_err(|e| format!("Failed to add primary_agent_id column: {}", e))?;
         }
 
+        let has_tree_id = column_names.iter().any(|name| name == "tree_id");
+        if !has_tree_id {
+            sqlx::query("ALTER TABLE orcha_sessions ADD COLUMN tree_id TEXT")
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to add tree_id column: {}", e))?;
+        }
+
         // Create orcha_agents table
         sqlx::query(
             r#"
@@ -172,6 +175,7 @@ impl OrchaStorage {
                 .unwrap_or(super::types::AgentMode::Single);
 
             let primary_agent_id: Option<String> = row.try_get("primary_agent_id").ok().flatten();
+            let tree_id: Option<String> = row.try_get("tree_id").ok().flatten();
 
             let state = self.deserialize_state(&state_type, state_data.as_deref())?;
 
@@ -185,6 +189,7 @@ impl OrchaStorage {
                 max_retries: max_retries as u32,
                 agent_mode,
                 primary_agent_id,
+                tree_id,
             };
 
             sessions.insert(session_id, info);
@@ -202,6 +207,7 @@ impl OrchaStorage {
         rules: Option<String>,
         max_retries: u32,
         agent_mode: super::types::AgentMode,
+        tree_id: Option<String>,
     ) -> Result<SessionInfo, String> {
         let now = chrono::Utc::now().timestamp();
 
@@ -220,6 +226,7 @@ impl OrchaStorage {
             max_retries,
             agent_mode,
             primary_agent_id: None,
+            tree_id: tree_id.clone(),
         };
 
         // Insert into database
@@ -228,8 +235,8 @@ impl OrchaStorage {
             INSERT INTO orcha_sessions (
                 session_id, model, working_directory, rules, max_retries,
                 retry_count, created_at, last_activity, state_type, state_data,
-                agent_mode, primary_agent_id
-            ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'idle', NULL, ?, NULL)
+                agent_mode, primary_agent_id, tree_id
+            ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'idle', NULL, ?, NULL, ?)
             "#,
         )
         .bind(&session_id)
@@ -240,6 +247,7 @@ impl OrchaStorage {
         .bind(now)
         .bind(now)
         .bind(agent_mode_str)
+        .bind(&tree_id)
         .execute(&self.pool)
         .await
         .map_err(|e| format!("Failed to create session: {}", e))?;

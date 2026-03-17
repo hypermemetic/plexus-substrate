@@ -4,8 +4,10 @@ use super::types::{
     NodeEvent, Position, StreamId, StreamInfo, StreamStatus,
 };
 use crate::activations::arbor::{ArborStorage, NodeId, NodeType, TreeId};
+use crate::activations::storage::init_sqlite_pool;
+use crate::activation_db_path_from_module;
 use serde_json::Value;
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePool}, ConnectOptions, Row};
+use sqlx::{sqlite::SqlitePool, Row};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +35,7 @@ pub struct ClaudeCodeStorageConfig {
 impl Default for ClaudeCodeStorageConfig {
     fn default() -> Self {
         Self {
-            db_path: PathBuf::from("claudecode.db"),
+            db_path: activation_db_path_from_module!("claudecode.db"),
         }
     }
 }
@@ -61,13 +63,8 @@ impl ClaudeCodeStorage {
         config: ClaudeCodeStorageConfig,
         arbor: Arc<ArborStorage>,
     ) -> Result<Self, ClaudeCodeError> {
-        let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
-        let connect_options: SqliteConnectOptions = db_url.parse()
-            .map_err(|e| parse_err("database URL", e))?;
-        let connect_options = connect_options.disable_statement_logging();
-        let pool = SqlitePool::connect_with(connect_options.clone())
-            .await
-            .map_err(|e| db_err("connect", e))?;
+        let pool = init_sqlite_pool(config.db_path).await
+            .map_err(|e| db_err("connect", sqlx::Error::Configuration(e.into())))?;
 
         let storage = Self {
             pool,
@@ -87,6 +84,7 @@ impl ClaudeCodeStorage {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 claude_session_id TEXT,
+                loopback_session_id TEXT,
                 tree_id TEXT NOT NULL,
                 canonical_head TEXT NOT NULL,
                 working_dir TEXT NOT NULL,
@@ -133,6 +131,13 @@ impl ClaudeCodeStorage {
         .await
         .map_err(|e| db_err("run migrations", e))?;
 
+        // Migration: add loopback_session_id if not present
+        let _ = sqlx::query(
+            "ALTER TABLE claudecode_sessions ADD COLUMN loopback_session_id TEXT",
+        )
+        .execute(&self.pool)
+        .await;
+
         Ok(())
     }
 
@@ -154,6 +159,8 @@ impl ClaudeCodeStorage {
         system_prompt: Option<String>,
         mcp_config: Option<Value>,
         loopback_enabled: bool,
+        claude_session_id: Option<String>,
+        loopback_session_id: Option<String>,
         metadata: Option<Value>,
     ) -> Result<ClaudeCodeConfig, ClaudeCodeError> {
         let session_id = ClaudeCodeId::new_v4();
@@ -179,11 +186,13 @@ impl ClaudeCodeStorage {
 
         // Try inserting with the original name first
         let final_name = match sqlx::query(
-            "INSERT INTO claudecode_sessions (id, name, claude_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at)
-             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO claudecode_sessions (id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(&name)
+        .bind(&claude_session_id)
+        .bind(&loopback_session_id)
         .bind(head.tree_id.to_string())
         .bind(head.node_id.to_string())
         .bind(&working_dir)
@@ -203,11 +212,13 @@ impl ClaudeCodeStorage {
                 let unique_name = format!("{}#{}", name, session_id);
 
                 sqlx::query(
-                    "INSERT INTO claudecode_sessions (id, name, claude_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at)
-                     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO claudecode_sessions (id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(session_id.to_string())
                 .bind(&unique_name)
+                .bind(&claude_session_id)
+                .bind(&loopback_session_id)
                 .bind(head.tree_id.to_string())
                 .bind(head.node_id.to_string())
                 .bind(&working_dir)
@@ -230,7 +241,8 @@ impl ClaudeCodeStorage {
         Ok(ClaudeCodeConfig {
             id: session_id,
             name: final_name,
-            claude_session_id: None,
+            claude_session_id,
+            loopback_session_id,
             head,
             working_dir,
             model,
@@ -246,7 +258,7 @@ impl ClaudeCodeStorage {
     /// Get a session by ID
     pub async fn session_get(&self, session_id: &ClaudeCodeId) -> Result<ClaudeCodeConfig, ClaudeCodeError> {
         let row = sqlx::query(
-            "SELECT id, name, claude_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
+            "SELECT id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
              FROM claudecode_sessions WHERE id = ?",
         )
         .bind(session_id.to_string())
@@ -262,7 +274,7 @@ impl ClaudeCodeStorage {
     pub async fn session_get_by_name(&self, name: &str) -> Result<ClaudeCodeConfig, ClaudeCodeError> {
         // Try exact match first
         if let Some(row) = sqlx::query(
-            "SELECT id, name, claude_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
+            "SELECT id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
              FROM claudecode_sessions WHERE name = ?",
         )
         .bind(name)
@@ -276,7 +288,7 @@ impl ClaudeCodeStorage {
         // Try partial match
         let pattern = format!("{}%", name);
         let rows = sqlx::query(
-            "SELECT id, name, claude_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
+            "SELECT id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
              FROM claudecode_sessions WHERE name LIKE ?",
         )
         .bind(&pattern)
@@ -374,6 +386,44 @@ impl ClaudeCodeStorage {
             return Err(ClaudeCodeError::SessionNotFound { identifier: session_id.to_string() });
         }
 
+        Ok(())
+    }
+
+    /// Update the loopback_session_id after session creation
+    pub async fn session_update_loopback_id(
+        &self,
+        session_id: &ClaudeCodeId,
+        loopback_session_id: String,
+    ) -> Result<(), ClaudeCodeError> {
+        let now = current_timestamp();
+        sqlx::query(
+            "UPDATE claudecode_sessions SET loopback_session_id = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&loopback_session_id)
+        .bind(now)
+        .bind(session_id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| db_err("update loopback_session_id", e))?;
+        Ok(())
+    }
+
+    /// Update the claude_session_id (real Claude UUID) after first successful chat
+    pub async fn session_update_claude_id(
+        &self,
+        session_id: &ClaudeCodeId,
+        claude_session_id: String,
+    ) -> Result<(), ClaudeCodeError> {
+        let now = current_timestamp();
+        sqlx::query(
+            "UPDATE claudecode_sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&claude_session_id)
+        .bind(now)
+        .bind(session_id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| db_err("update claude_session_id", e))?;
         Ok(())
     }
 
@@ -958,6 +1008,9 @@ impl ClaudeCodeStorage {
                         }
                     }
                 }
+
+                // Debug/observability nodes — not part of conversation history
+                NodeEvent::LaunchCommand { .. } | NodeEvent::ClaudeStderr { .. } => {}
             }
         }
 
@@ -1018,6 +1071,7 @@ impl ClaudeCodeStorage {
             id: Uuid::parse_str(&id_str).map_err(|e| parse_err("session ID", e))?,
             name: row.get("name"),
             claude_session_id: row.get("claude_session_id"),
+            loopback_session_id: row.try_get("loopback_session_id").ok().flatten(),
             head: Position::new(tree_id, node_id),
             working_dir: row.get("working_dir"),
             model,
