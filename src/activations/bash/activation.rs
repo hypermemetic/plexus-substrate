@@ -1,7 +1,11 @@
 use super::executor::BashExecutor;
 use super::types::BashEvent;
 use futures::Stream;
-use plexus_macros::hub_methods;
+use crate::activation;
+use crate::plexus::Activation;
+
+// Imports needed for generated RPC code
+use jsonrpsee::{proc_macros::rpc, PendingSubscriptionSink};
 
 /// Bash activation - execute shell commands and stream output
 #[derive(Clone)]
@@ -24,7 +28,7 @@ impl Bash {
         &self,
         mustache: &crate::activations::mustache::Mustache,
     ) -> Result<(), String> {
-        let plugin_id = Self::PLUGIN_ID;
+        let plugin_id = self.plugin_id();
 
         mustache.register_templates(plugin_id, &[
             // Execute method - command output
@@ -41,14 +45,14 @@ impl Default for Bash {
     }
 }
 
-#[hub_methods(
+#[activation(
     namespace = "bash",
     version = "1.0.0",
-    description = "Execute bash commands and stream output"
+    description = "Execute bash commands and stream output",
+    plexus  // Enable Plexus JSON-RPC transport
 )]
 impl Bash {
     /// Execute a bash command and stream stdout, stderr, and exit code
-    #[plexus_macros::hub_method]
     async fn execute(&self, command: String) -> impl Stream<Item = BashEvent> + Send + 'static {
         self.executor.execute(&command).await
     }
@@ -82,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_generated_method_enum() {
-        let names = BashMethod::all_method_names();
+        let names = BashMethod::all_names();
         assert!(names.contains(&"execute"));
     }
 

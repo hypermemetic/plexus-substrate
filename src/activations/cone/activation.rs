@@ -5,7 +5,6 @@ use super::types::{
     ListResult, MessageRole, RegistryResult, ResolveResult, SetHeadResult,
 };
 use crate::activations::arbor::{Node, NodeId, NodeType};
-use crate::activations::bash::Bash;
 use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
 use cllient::{Message, ModelRegistry};
@@ -667,7 +666,7 @@ async fn resolve_context_to_messages(
                         MessageRole::System => Message::system(&msg.content),
                     };
                     messages.push(cllient_msg);
-                } else if handle.plugin_id == Bash::PLUGIN_ID {
+                } else if handle.plugin_id == uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"bash@1") {
                     // TODO: Resolve bash output when bash plugin integration is added
                     let cmd_id = handle.meta.first().map(|s| s.as_str()).unwrap_or("unknown");
                     messages.push(Message::user(&format!(
