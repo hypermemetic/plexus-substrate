@@ -237,19 +237,27 @@ async fn main() -> anyhow::Result<()> {
         {
             // Combined WebSocket + MCP HTTP on same port
             use plexus_core::plexus::DynamicHub;
+            eprintln!("[TRACE] main: calling hub.list_plugin_schemas()");
             let flat_schemas = hub.list_plugin_schemas();
+            eprintln!("[TRACE] main: list_plugin_schemas() returned {} schemas", flat_schemas.len());
+            eprintln!("[TRACE] main: calling DynamicHub::arc_into_rpc_module()");
             let module = DynamicHub::arc_into_rpc_module(hub.clone())
                 .map_err(|e| anyhow::anyhow!("Failed to create RPC module: {}", e))?;
+            eprintln!("[TRACE] main: arc_into_rpc_module() completed successfully");
             let hub_route = hub.clone();
+            eprintln!("[TRACE] main: creating route_fn closure");
             let route_fn: RouteFn = Arc::new(move |method, params| {
                 let hub = hub_route.clone();
                 Box::pin(async move { hub.route(&method, params).await })
             });
+            eprintln!("[TRACE] main: parsing socket address");
             let addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port).parse()?;
             tracing::info!("Substrate Plexus RPC server started");
             tracing::info!("  WebSocket: ws://127.0.0.1:{}", args.port);
             tracing::info!("  MCP HTTP:  http://127.0.0.1:{}/mcp", args.port);
+            eprintln!("[TRACE] main: calling serve_combined()");
             let handle = serve_combined(module, hub, Some(flat_schemas), Some(route_fn), addr, args.api_key, false).await?;
+            eprintln!("[TRACE] main: serve_combined() started, waiting for stopped()");
             handle.stopped().await;
             Ok(())
         }
