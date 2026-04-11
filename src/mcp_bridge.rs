@@ -80,6 +80,9 @@ fn plexus_to_mcp_error(e: PlexusError) -> McpError {
         PlexusError::TransportError(kind) => {
             McpError::internal_error(format!("Transport error: {:?}", kind), None)
         }
+        PlexusError::Unauthenticated(reason) => {
+            McpError::invalid_params(format!("Unauthenticated: {}", reason), None)
+        }
     }
 }
 
@@ -153,7 +156,7 @@ impl ServerHandler for PlexusMcpBridge {
         // Call Plexus RPC hub and get stream
         let stream = self
             .hub
-            .route(method_name, arguments)
+            .route(method_name, arguments, None)
             .await
             .map_err(plexus_to_mcp_error)?;
 

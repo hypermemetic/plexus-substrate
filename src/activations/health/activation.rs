@@ -130,66 +130,64 @@ impl Activation for Health {
         }
     }
 
-    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        match method {
-            "check" => {
-                let stream = self.check_stream();
-                Ok(wrap_stream(stream, "health.status", vec!["health".into()]))
-            }
-            "schema" => {
-                use crate::plexus::SchemaResult;
-
-                // Check if a specific method was requested
-                let method_name: Option<String> = params.get("method")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-
-                let plugin_schema = self.plugin_schema();
-
-                let result = if let Some(ref name) = method_name {
-                    // Find the specific method
-                    plugin_schema.methods.iter()
-                        .find(|m| m.name == *name)
-                        .map(|m| SchemaResult::Method(m.clone()))
-                        .ok_or_else(|| PlexusError::MethodNotFound {
-                            activation: "health".to_string(),
-                            method: name.clone(),
-                        })?
-                } else {
-                    // Return full plugin schema
-                    SchemaResult::Plugin(plugin_schema)
-                };
-
-                Ok(wrap_stream(
-                    futures::stream::once(async move { result }),
-                    "health.schema",
-                    vec!["health".into()]
-                ))
-            }
-            _ => {
-                // Check for {method}.schema pattern (e.g., "check.schema")
-                // Only if the prefix is an actual local method
-                if let Some(method_name) = method.strip_suffix(".schema") {
-                    use crate::plexus::SchemaResult;
-
-                    let plugin_schema = self.plugin_schema();
-                    if let Some(m) = plugin_schema.methods.iter().find(|m| m.name == method_name) {
-                        let result = SchemaResult::Method(m.clone());
-                        return Ok(wrap_stream(
-                            futures::stream::once(async move { result }),
-                            "health.method_schema",
-                            vec!["health".into()]
-                        ));
-                    }
-                }
-
-                Err(PlexusError::MethodNotFound {
-                    activation: "health".to_string(),
-                    method: method.to_string(),
-                })
-            }
+    async fn call(&self, method: &str, params: Value, _auth: Option<&plexus_core::plexus::AuthContext>, _raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<PlexusStream, PlexusError> { match method {
+        "check" => {
+            let stream = self.check_stream();
+            Ok(wrap_stream(stream, "health.status", vec!["health".into()]))
         }
-    }
+        "schema" => {
+            use crate::plexus::SchemaResult;
+    
+            // Check if a specific method was requested
+            let method_name: Option<String> = params.get("method")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+    
+            let plugin_schema = self.plugin_schema();
+    
+            let result = if let Some(ref name) = method_name {
+                // Find the specific method
+                plugin_schema.methods.iter()
+                    .find(|m| m.name == *name)
+                    .map(|m| SchemaResult::Method(m.clone()))
+                    .ok_or_else(|| PlexusError::MethodNotFound {
+                        activation: "health".to_string(),
+                        method: name.clone(),
+                    })?
+            } else {
+                // Return full plugin schema
+                SchemaResult::Plugin(plugin_schema)
+            };
+    
+            Ok(wrap_stream(
+                futures::stream::once(async move { result }),
+                "health.schema",
+                vec!["health".into()]
+            ))
+        }
+        _ => {
+            // Check for {method}.schema pattern (e.g., "check.schema")
+            // Only if the prefix is an actual local method
+            if let Some(method_name) = method.strip_suffix(".schema") {
+                use crate::plexus::SchemaResult;
+    
+                let plugin_schema = self.plugin_schema();
+                if let Some(m) = plugin_schema.methods.iter().find(|m| m.name == method_name) {
+                    let result = SchemaResult::Method(m.clone());
+                    return Ok(wrap_stream(
+                        futures::stream::once(async move { result }),
+                        "health.method_schema",
+                        vec!["health".into()]
+                    ));
+                }
+            }
+    
+            Err(PlexusError::MethodNotFound {
+                activation: "health".to_string(),
+                method: method.to_string(),
+            })
+        }
+    } }
 
     fn into_rpc_methods(self) -> Methods {
         // Register RPC subscription methods
@@ -222,5 +220,20 @@ impl Activation for Health {
         ];
 
         PluginSchema::leaf(self.namespace(), self.version(), self.description(), methods)
+    }
+}
+
+#[async_trait]
+impl plexus_core::plexus::ChildRouter for Health {
+    fn router_namespace(&self) -> &str {
+        "health"
+    }
+
+    async fn router_call(&self, method: &str, params: Value, auth: Option<&plexus_core::plexus::AuthContext>, raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<PlexusStream, PlexusError> {
+        Activation::call(self, method, params, auth, raw_ctx).await
+    }
+
+    async fn get_child(&self, _name: &str) -> Option<Box<dyn plexus_core::plexus::ChildRouter>> {
+        None
     }
 }

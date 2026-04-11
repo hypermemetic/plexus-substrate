@@ -240,67 +240,65 @@ impl Activation for CelestialBodyActivation {
         }
     }
 
-    async fn call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        match method {
-            "info" => {
-                let stream = self.info_stream();
-                Ok(wrap_stream(stream, "celestial.info", vec![self.namespace.clone()]))
-            }
-            "schema" => {
-                use crate::plexus::SchemaResult;
-
-                // Check if a specific method was requested
-                let method_name: Option<String> = params.get("method")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-
-                let plugin_schema = self.plugin_schema();
-                let ns = self.namespace.clone();
-
-                let result = if let Some(ref name) = method_name {
-                    // Find the specific method
-                    plugin_schema.methods.iter()
-                        .find(|m| m.name == *name)
-                        .map(|m| SchemaResult::Method(m.clone()))
-                        .ok_or_else(|| PlexusError::MethodNotFound {
-                            activation: ns.clone(),
-                            method: name.clone(),
-                        })?
-                } else {
-                    // Return full plugin schema
-                    SchemaResult::Plugin(plugin_schema)
-                };
-
-                Ok(wrap_stream(
-                    futures::stream::once(async move { result }),
-                    "celestial.schema",
-                    vec![ns]
-                ))
-            }
-            _ => {
-                // Check for {method}.schema pattern (e.g., "info.schema")
-                // Only if the prefix is an actual local method (not a child)
-                if let Some(method_name) = method.strip_suffix(".schema") {
-                    use crate::plexus::SchemaResult;
-
-                    let plugin_schema = self.plugin_schema();
-                    if let Some(m) = plugin_schema.methods.iter().find(|m| m.name == method_name) {
-                        let ns = self.namespace.clone();
-                        let result = SchemaResult::Method(m.clone());
-                        return Ok(wrap_stream(
-                            futures::stream::once(async move { result }),
-                            "celestial.method_schema",
-                            vec![ns]
-                        ));
-                    }
-                    // Not a local method - fall through to child routing
-                }
-
-                // Try routing to child
-                crate::plexus::route_to_child(self, method, params).await
-            }
+    async fn call(&self, method: &str, params: Value, _auth: Option<&plexus_core::plexus::AuthContext>, _raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<PlexusStream, PlexusError> { match method {
+        "info" => {
+            let stream = self.info_stream();
+            Ok(wrap_stream(stream, "celestial.info", vec![self.namespace.clone()]))
         }
-    }
+        "schema" => {
+            use crate::plexus::SchemaResult;
+    
+            // Check if a specific method was requested
+            let method_name: Option<String> = params.get("method")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+    
+            let plugin_schema = self.plugin_schema();
+            let ns = self.namespace.clone();
+    
+            let result = if let Some(ref name) = method_name {
+                // Find the specific method
+                plugin_schema.methods.iter()
+                    .find(|m| m.name == *name)
+                    .map(|m| SchemaResult::Method(m.clone()))
+                    .ok_or_else(|| PlexusError::MethodNotFound {
+                        activation: ns.clone(),
+                        method: name.clone(),
+                    })?
+            } else {
+                // Return full plugin schema
+                SchemaResult::Plugin(plugin_schema)
+            };
+    
+            Ok(wrap_stream(
+                futures::stream::once(async move { result }),
+                "celestial.schema",
+                vec![ns]
+            ))
+        }
+        _ => {
+            // Check for {method}.schema pattern (e.g., "info.schema")
+            // Only if the prefix is an actual local method (not a child)
+            if let Some(method_name) = method.strip_suffix(".schema") {
+                use crate::plexus::SchemaResult;
+    
+                let plugin_schema = self.plugin_schema();
+                if let Some(m) = plugin_schema.methods.iter().find(|m| m.name == method_name) {
+                    let ns = self.namespace.clone();
+                    let result = SchemaResult::Method(m.clone());
+                    return Ok(wrap_stream(
+                        futures::stream::once(async move { result }),
+                        "celestial.method_schema",
+                        vec![ns]
+                    ));
+                }
+                // Not a local method - fall through to child routing
+            }
+    
+            // Try routing to child
+            crate::plexus::route_to_child(self, method, params, None, None).await
+        }
+    } }
 
     fn into_rpc_methods(self) -> Methods {
         // Celestial bodies don't register their own RPC methods
@@ -319,10 +317,10 @@ impl ChildRouter for CelestialBodyActivation {
         &self.namespace
     }
 
-    async fn router_call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        // Delegate to Activation::call which handles local methods + nested routing
-        Activation::call(self, method, params).await
-    }
+    async fn router_call(&self, method: &str, params: Value, auth: Option<&plexus_core::plexus::AuthContext>, raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<PlexusStream, PlexusError> {
+            // Delegate to Activation::call which handles local methods + nested routing
+            Activation::call(self, method, params, auth, raw_ctx).await
+        }
 
     async fn get_child(&self, name: &str) -> Option<Box<dyn ChildRouter>> {
         let normalized = name.to_lowercase();

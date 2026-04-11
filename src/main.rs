@@ -139,13 +139,13 @@ async fn main() -> anyhow::Result<()> {
             let hub_route = hub.clone();
             let route_fn: RouteFn = Arc::new(move |method, params| {
                 let hub = hub_route.clone();
-                Box::pin(async move { hub.route(&method, params).await })
+                Box::pin(async move { hub.route(&method, params, None).await })
             });
             let addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port).parse()?;
             tracing::info!("Substrate Plexus RPC server started");
             tracing::info!("  WebSocket: ws://127.0.0.1:{}", args.port);
             tracing::info!("  MCP HTTP:  http://127.0.0.1:{}/mcp", args.port);
-            let handle = serve_combined(module, hub, Some(flat_schemas), Some(route_fn), addr, args.api_key).await?;
+            let handle = serve_combined(module, hub, Some(flat_schemas), Some(route_fn), addr, args.api_key, false).await?;
             handle.stopped().await;
             Ok(())
         }

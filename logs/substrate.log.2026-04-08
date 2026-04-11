@@ -1,0 +1,1 @@
+2026-04-08T17:34:11.146887Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name

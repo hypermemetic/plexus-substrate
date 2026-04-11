@@ -1,0 +1,18 @@
+2026-04-02T23:50:40.455517Z ERROR plexus_substrate: ▓▓▓ SUBSTRATE BOOT SEQUENCE ▓▓▓
+2026-04-02T23:50:40.455554Z  WARN plexus_substrate:   ├─ warn  :: caution signals armed
+2026-04-02T23:50:40.455599Z  WARN plexus_substrate: Authentication: DISABLED — set --api-key or PLEXUS_API_KEY to require bearer tokens
+2026-04-02T23:50:40.583330Z ERROR plexus_substrate::builder: UNDOCUMENTED PLEXUS CHANGE: 29b3e353b19cd6e7 -> cf60a666cde036b2. Add changelog entry for hash 'cf60a666cde036b2'
+2026-04-02T23:50:59.290462Z ERROR plexus_substrate: ▓▓▓ SUBSTRATE BOOT SEQUENCE ▓▓▓
+2026-04-02T23:50:59.290488Z  WARN plexus_substrate:   ├─ warn  :: caution signals armed
+2026-04-02T23:50:59.290519Z  WARN plexus_substrate: Authentication: DISABLED — set --api-key or PLEXUS_API_KEY to require bearer tokens
+2026-04-02T23:50:59.406028Z ERROR plexus_substrate::builder: UNDOCUMENTED PLEXUS CHANGE: cf60a666cde036b2 -> b2c8fec70621bda0. Add changelog entry for hash 'b2c8fec70621bda0'
+2026-04-02T23:52:51.218184Z ERROR plexus_substrate: ▓▓▓ SUBSTRATE BOOT SEQUENCE ▓▓▓
+2026-04-02T23:52:51.218230Z  WARN plexus_substrate:   ├─ warn  :: caution signals armed
+2026-04-02T23:52:51.218279Z  WARN plexus_substrate: Authentication: DISABLED — set --api-key or PLEXUS_API_KEY to require bearer tokens
+2026-04-02T23:52:51.335503Z ERROR plexus_substrate::builder: UNDOCUMENTED PLEXUS CHANGE: b2c8fec70621bda0 -> ee8b29dfa6e411cf. Add changelog entry for hash 'ee8b29dfa6e411cf'
+2026-04-02T23:53:09.755840Z ERROR plexus_substrate: ▓▓▓ SUBSTRATE BOOT SEQUENCE ▓▓▓
+2026-04-02T23:53:09.755908Z  WARN plexus_substrate:   ├─ warn  :: caution signals armed
+2026-04-02T23:53:09.755974Z  WARN plexus_substrate: Authentication: DISABLED — set --api-key or PLEXUS_API_KEY to require bearer tokens
+2026-04-02T23:53:09.887180Z ERROR plexus_substrate::builder: UNDOCUMENTED PLEXUS CHANGE: ee8b29dfa6e411cf -> cf4bd6bf3152edc9. Add changelog entry for hash 'cf4bd6bf3152edc9'
+2026-04-02T23:58:23.943863Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
+2026-04-02T23:58:29.286941Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name

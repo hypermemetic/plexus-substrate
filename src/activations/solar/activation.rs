@@ -64,17 +64,13 @@ impl Default for Solar {
     }
 }
 
-#[plexus_macros::hub_methods(
-    namespace = "solar",
-    version = "1.0.0",
-    description = "Solar system model - demonstrates nested plugin hierarchy",
-    hub
-)]
+#[plexus_macros::activation(namespace = "solar",
+version = "1.0.0",
+description = "Solar system model - demonstrates nested plugin hierarchy",
+hub, crate_path = "plexus_core")]
 impl Solar {
     /// Observe the entire solar system
-    #[plexus_macros::hub_method(
-        description = "Get an overview of the solar system"
-    )]
+    #[plexus_macros::method(description = "Get an overview of the solar system")]
     async fn observe(&self) -> impl Stream<Item = SolarEvent> + Send + 'static {
         let star = self.system.name.clone();
         let planet_count = self.system.children.len();
@@ -92,10 +88,8 @@ impl Solar {
     }
 
     /// Get information about a specific celestial body
-    #[plexus_macros::hub_method(
-        description = "Get detailed information about a celestial body",
-        params(path = "Path to the body (e.g., 'earth', 'jupiter.io', 'saturn.titan')")
-    )]
+    #[plexus_macros::method(description = "Get detailed information about a celestial body",
+    params(path = "Path to the body (e.g., 'earth', 'jupiter.io', 'saturn.titan')"))]
     async fn info(
         &self,
         path: String,
@@ -134,10 +128,10 @@ impl ChildRouter for Solar {
         "solar"
     }
 
-    async fn router_call(&self, method: &str, params: serde_json::Value) -> Result<crate::plexus::PlexusStream, crate::plexus::PlexusError> {
-        // Delegate to Activation::call which handles local methods + nested routing
-        Activation::call(self, method, params).await
-    }
+    async fn router_call(&self, method: &str, params: serde_json::Value, auth: Option<&plexus_core::plexus::AuthContext>, raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<crate::plexus::PlexusStream, crate::plexus::PlexusError> {
+            // Delegate to Activation::call which handles local methods + nested routing
+            Activation::call(self, method, params, auth, raw_ctx).await
+        }
 
     async fn get_child(&self, name: &str) -> Option<Box<dyn ChildRouter>> {
         let normalized = name.to_lowercase();

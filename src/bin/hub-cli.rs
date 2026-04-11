@@ -111,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     println!("---");
 
     // Route to the target activation and stream results
-    let mut stream = plexus.route(method, params).await?;
+    let mut stream = plexus.route(method, params, None).await?;
 
     while let Some(item) = stream.next().await {
         println!("{}", serde_json::to_string_pretty(&item)?);

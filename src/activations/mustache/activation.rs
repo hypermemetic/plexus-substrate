@@ -88,26 +88,22 @@ impl Clone for Mustache {
 }
 
 /// Hub-macro generates all the boilerplate for this impl block
-#[plexus_macros::hub_methods(
-    namespace = "mustache",
-    version = "1.0.0",
-    description = "Mustache template rendering for handle values"
-)]
+#[plexus_macros::activation(namespace = "mustache",
+version = "1.0.0",
+description = "Mustache template rendering for handle values", crate_path = "plexus_core")]
 impl Mustache {
     /// Render a value using a template
     ///
     /// Looks up the template for the given plugin/method/name combination
     /// and renders the value using mustache templating. If template_name
     /// is None, uses "default".
-    #[plexus_macros::hub_method(
-        description = "Render a value using a registered mustache template",
-        params(
-            plugin_id = "UUID of the plugin that owns the template",
-            method = "Method name the template is for",
-            template_name = "Template name (defaults to 'default' if not specified)",
-            value = "JSON value to render with the template"
-        )
-    )]
+    #[plexus_macros::method(description = "Render a value using a registered mustache template",
+    params(
+        plugin_id = "UUID of the plugin that owns the template",
+        method = "Method name the template is for",
+        template_name = "Template name (defaults to 'default' if not specified)",
+        value = "JSON value to render with the template"
+    ))]
     async fn render(
         &self,
         plugin_id: Uuid,
@@ -174,15 +170,13 @@ impl Mustache {
     ///
     /// Templates are identified by (plugin_id, method, name). If a template
     /// with the same identifier already exists, it will be updated.
-    #[plexus_macros::hub_method(
-        description = "Register a mustache template for a plugin method",
-        params(
-            plugin_id = "UUID of the plugin registering the template",
-            method = "Method name this template is for",
-            name = "Template name (e.g., 'default', 'compact', 'verbose')",
-            template = "Mustache template content"
-        )
-    )]
+    #[plexus_macros::method(description = "Register a mustache template for a plugin method",
+    params(
+        plugin_id = "UUID of the plugin registering the template",
+        method = "Method name this template is for",
+        name = "Template name (e.g., 'default', 'compact', 'verbose')",
+        template = "Mustache template content"
+    ))]
     async fn register_template(
         &self,
         plugin_id: Uuid,
@@ -215,10 +209,8 @@ impl Mustache {
     }
 
     /// List all templates for a plugin
-    #[plexus_macros::hub_method(
-        description = "List all templates registered for a plugin",
-        params(plugin_id = "UUID of the plugin to list templates for")
-    )]
+    #[plexus_macros::method(description = "List all templates registered for a plugin",
+    params(plugin_id = "UUID of the plugin to list templates for"))]
     async fn list_templates(
         &self,
         plugin_id: Uuid,
@@ -240,14 +232,12 @@ impl Mustache {
     }
 
     /// Get a specific template
-    #[plexus_macros::hub_method(
-        description = "Get a specific template by plugin, method, and name",
-        params(
-            plugin_id = "UUID of the plugin that owns the template",
-            method = "Method name the template is for",
-            name = "Template name"
-        )
-    )]
+    #[plexus_macros::method(description = "Get a specific template by plugin, method, and name",
+    params(
+        plugin_id = "UUID of the plugin that owns the template",
+        method = "Method name the template is for",
+        name = "Template name"
+    ))]
     async fn get_template(
         &self,
         plugin_id: Uuid,
@@ -279,14 +269,12 @@ impl Mustache {
     }
 
     /// Delete a template
-    #[plexus_macros::hub_method(
-        description = "Delete a specific template",
-        params(
-            plugin_id = "UUID of the plugin that owns the template",
-            method = "Method name the template is for",
-            name = "Template name"
-        )
-    )]
+    #[plexus_macros::method(description = "Delete a specific template",
+    params(
+        plugin_id = "UUID of the plugin that owns the template",
+        method = "Method name the template is for",
+        name = "Template name"
+    ))]
     async fn delete_template(
         &self,
         plugin_id: Uuid,

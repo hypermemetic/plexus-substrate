@@ -8,7 +8,7 @@ use crate::activations::arbor::{NodeId, TreeId};
 use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
-use plexus_macros::hub_methods;
+use plexus_macros::activation;
 use serde_json::Value;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
@@ -148,15 +148,13 @@ async fn create_event_node(
         .map_err(|e| e.to_string())
 }
 
-#[hub_methods(
-    namespace = "claudecode",
-    version = "1.0.0",
-    description = "Manage Claude Code sessions with Arbor-backed conversation history",
-    resolve_handle
-)]
+#[plexus_macros::activation(namespace = "claudecode",
+version = "1.0.0",
+description = "Manage Claude Code sessions with Arbor-backed conversation history",
+resolve_handle, crate_path = "plexus_core")]
 impl<P: HubContext> ClaudeCode<P> {
     /// Create a new Claude Code session
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         name = "Human-readable name for the session",
         working_dir = "Working directory for Claude Code",
         model = "Model to use (opus, sonnet, haiku)",
@@ -217,15 +215,13 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Chat with a session, streaming tokens like Cone
-    #[plexus_macros::hub_method(
-        streaming,
-        params(
-            name = "Session name to chat with",
-            prompt = "User message / prompt to send",
-            ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion",
-            allowed_tools = "Optional list of tools to allow (e.g. [\"WebSearch\", \"Read\"])"
-        )
-    )]
+    #[plexus_macros::method(streaming,
+    params(
+        name = "Session name to chat with",
+        prompt = "User message / prompt to send",
+        ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion",
+        allowed_tools = "Optional list of tools to allow (e.g. [\"WebSearch\", \"Read\"])"
+    ))]
     pub async fn chat(
         &self,
         name: String,
@@ -674,7 +670,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Get session configuration details
-    #[plexus_macros::hub_method]
+    #[plexus_macros::method]
     async fn get(&self, name: String) -> impl Stream<Item = GetResult> + Send + 'static {
         let result = self.storage.session_get_by_name(&name).await;
 
@@ -691,7 +687,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// List all Claude Code sessions
-    #[plexus_macros::hub_method]
+    #[plexus_macros::method]
     async fn list(&self) -> impl Stream<Item = ListResult> + Send + 'static {
         let storage = self.storage.clone();
 
@@ -708,7 +704,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Delete a session
-    #[plexus_macros::hub_method]
+    #[plexus_macros::method]
     async fn delete(&self, name: String) -> impl Stream<Item = DeleteResult> + Send + 'static {
         let storage = self.storage.clone();
         let resolve_result = storage.session_get_by_name(&name).await;
@@ -734,7 +730,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Fork a session to create a branch point
-    #[plexus_macros::hub_method]
+    #[plexus_macros::method]
     async fn fork(
         &self,
         name: String,
@@ -793,13 +789,11 @@ impl<P: HubContext> ClaudeCode<P> {
     ///
     /// This is the non-blocking version of chat, designed for loopback scenarios
     /// where the parent needs to poll for events and handle tool approvals.
-    #[plexus_macros::hub_method(
-        params(
-            name = "Session name to chat with",
-            prompt = "User message / prompt to send",
-            ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
-        )
-    )]
+    #[plexus_macros::method(params(
+        name = "Session name to chat with",
+        prompt = "User message / prompt to send",
+        ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
+    ))]
     async fn chat_async(
         &self,
         name: String,
@@ -865,13 +859,11 @@ impl<P: HubContext> ClaudeCode<P> {
     ///
     /// Returns events since the last poll (or from the specified offset).
     /// Use this to read events from an async chat started with chat_async.
-    #[plexus_macros::hub_method(
-        params(
-            stream_id = "Stream ID returned from chat_async",
-            from_seq = "Optional: start reading from this sequence number",
-            limit = "Optional: max events to return (default 100)"
-        )
-    )]
+    #[plexus_macros::method(params(
+        stream_id = "Stream ID returned from chat_async",
+        from_seq = "Optional: start reading from this sequence number",
+        limit = "Optional: max events to return (default 100)"
+    ))]
     async fn poll(
         &self,
         stream_id: StreamId,
@@ -904,11 +896,9 @@ impl<P: HubContext> ClaudeCode<P> {
     /// List active streams
     ///
     /// Returns all active streams, optionally filtered by session.
-    #[plexus_macros::hub_method(
-        params(
-            session_id = "Optional: filter by session ID"
-        )
-    )]
+    #[plexus_macros::method(params(
+        session_id = "Optional: filter by session ID"
+    ))]
     async fn streams(
         &self,
         session_id: Option<ClaudeCodeId>,
@@ -927,7 +917,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Get arbor tree information for a session
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         name = "Session name"
     ))]
     async fn get_tree(
@@ -953,7 +943,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Render arbor tree as Claude API messages
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         name = "Session name",
         start = "Optional start node (default: root)",
         end = "Optional end node (default: head)"
@@ -1006,7 +996,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// List all session files for a project
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         project_path = "Project path (e.g., '-workspace-hypermemetic-hub-codegen')"
     ))]
     async fn sessions_list(
@@ -1026,7 +1016,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Get events from a session file
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         project_path = "Project path",
         session_id = "Session ID (UUID)"
     ))]
@@ -1058,7 +1048,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Import a session file into arbor
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         project_path = "Project path",
         session_id = "Session ID to import",
         owner_id = "Owner ID for the new tree (default: 'claudecode')"
@@ -1089,7 +1079,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Export an arbor tree to a session file
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         tree_id = "Arbor tree ID to export",
         project_path = "Project path",
         session_id = "Session ID for the exported file"
@@ -1118,7 +1108,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 
     /// Delete a session file
-    #[plexus_macros::hub_method(params(
+    #[plexus_macros::method(params(
         project_path = "Project path",
         session_id = "Session ID to delete"
     ))]

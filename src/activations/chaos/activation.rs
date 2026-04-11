@@ -51,16 +51,12 @@ fn find_pids_by_cmdline(pattern: &str) -> Vec<(u32, String)> {
     results
 }
 
-#[plexus_macros::hub_methods(
-    namespace = "chaos",
-    version = "1.0.0",
-    description = "Fault injection and observability for anti-fragility testing"
-)]
+#[plexus_macros::activation(namespace = "chaos",
+version = "1.0.0",
+description = "Fault injection and observability for anti-fragility testing", crate_path = "plexus_core")]
 impl Chaos {
     /// List all nodes currently in Running state across every lattice graph.
-    #[plexus_macros::hub_method(
-        description = "List all Running nodes across all lattice graphs"
-    )]
+    #[plexus_macros::method(description = "List all Running nodes across all lattice graphs")]
     async fn list_running_nodes(
         &self,
     ) -> impl Stream<Item = ListRunningResult> + Send + 'static {
@@ -95,14 +91,12 @@ impl Chaos {
 
     /// Force-fail a specific node. Calls advance_graph with an error token,
     /// triggering downstream failure propagation and retry logic.
-    #[plexus_macros::hub_method(
-        description = "Inject a failure into a running node",
-        params(
-            graph_id = "Lattice graph ID",
-            node_id = "Node to fail",
-            error = "Error message to inject (default: 'chaos: injected failure')"
-        )
-    )]
+    #[plexus_macros::method(description = "Inject a failure into a running node",
+    params(
+        graph_id = "Lattice graph ID",
+        node_id = "Node to fail",
+        error = "Error message to inject (default: 'chaos: injected failure')"
+    ))]
     async fn inject_failure(
         &self,
         graph_id: String,
@@ -138,14 +132,12 @@ impl Chaos {
 
     /// Force-complete a specific node with an ok token.
     /// Useful for unblocking stuck nodes or skipping tasks in a test graph.
-    #[plexus_macros::hub_method(
-        description = "Inject a success into a running node",
-        params(
-            graph_id = "Lattice graph ID",
-            node_id = "Node to complete",
-            value = "JSON value to use as the output token (default: null)"
-        )
-    )]
+    #[plexus_macros::method(description = "Inject a success into a running node",
+    params(
+        graph_id = "Lattice graph ID",
+        node_id = "Node to complete",
+        value = "JSON value to use as the output token (default: null)"
+    ))]
     async fn inject_success(
         &self,
         graph_id: String,
@@ -188,10 +180,8 @@ impl Chaos {
     }
 
     /// List system processes whose cmdline contains the given pattern.
-    #[plexus_macros::hub_method(
-        description = "List processes matching a cmdline pattern",
-        params(pattern = "Substring to search for in /proc/*/cmdline")
-    )]
+    #[plexus_macros::method(description = "List processes matching a cmdline pattern",
+    params(pattern = "Substring to search for in /proc/*/cmdline"))]
     async fn list_processes(
         &self,
         pattern: String,
@@ -207,10 +197,8 @@ impl Chaos {
     }
 
     /// Send SIGKILL to a process by PID.
-    #[plexus_macros::hub_method(
-        description = "Kill a process by PID (SIGKILL)",
-        params(pid = "Process ID to kill")
-    )]
+    #[plexus_macros::method(description = "Kill a process by PID (SIGKILL)",
+    params(pid = "Process ID to kill"))]
     async fn kill_process(
         &self,
         pid: u32,
@@ -238,10 +226,8 @@ impl Chaos {
     }
 
     /// Snapshot all nodes in a graph with their current statuses.
-    #[plexus_macros::hub_method(
-        description = "Get a full status snapshot of a lattice graph",
-        params(graph_id = "Lattice graph ID")
-    )]
+    #[plexus_macros::method(description = "Get a full status snapshot of a lattice graph",
+    params(graph_id = "Lattice graph ID"))]
     async fn graph_snapshot(
         &self,
         graph_id: String,
@@ -292,9 +278,7 @@ impl Chaos {
     /// Hard-crash the substrate process (SIGKILL self).
     /// Used to test crash recovery — the substrate will not respond after this call.
     /// Restart with `make restart` and observe `recovery: re-dispatching` in the logs.
-    #[plexus_macros::hub_method(
-        description = "Hard-crash the substrate (SIGKILL self) — use to test crash recovery"
-    )]
+    #[plexus_macros::method(description = "Hard-crash the substrate (SIGKILL self) — use to test crash recovery")]
     async fn crash(&self) -> impl Stream<Item = InjectResult> + Send + 'static {
         stream! {
             tracing::warn!("chaos: crash() called — killing substrate process");

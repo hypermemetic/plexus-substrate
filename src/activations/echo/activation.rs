@@ -36,20 +36,16 @@ impl Default for Echo {
 /// - EchoRpcServer implementation
 /// - Activation trait implementation
 /// - EchoMethod enum with JSON schemas
-#[plexus_macros::hub_methods(
-    namespace = "echo",
-    version = "1.0.0",
-    description = "Echo messages back - demonstrates plexus-macros usage"
-)]
+#[plexus_macros::activation(namespace = "echo",
+version = "1.0.0",
+description = "Echo messages back - demonstrates plexus-macros usage", crate_path = "plexus_core")]
 impl Echo {
     /// Echo a message back
-    #[plexus_macros::hub_method(
-        description = "Echo a message back the specified number of times",
-        params(
-            message = "The message to echo",
-            count = "Number of times to repeat (default: 1)"
-        )
-    )]
+    #[plexus_macros::method(description = "Echo a message back the specified number of times",
+    params(
+        message = "The message to echo",
+        count = "Number of times to repeat (default: 1)"
+    ))]
     async fn echo(
         &self,
         message: String,
@@ -70,10 +66,8 @@ impl Echo {
     }
 
     /// Echo a simple message once
-    #[plexus_macros::hub_method(
-        description = "Echo a message once",
-        params(message = "The message to echo")
-    )]
+    #[plexus_macros::method(description = "Echo a message once",
+    params(message = "The message to echo"))]
     async fn once(&self, message: String) -> impl Stream<Item = EchoEvent> + Send + 'static {
         stream! {
             yield EchoEvent::Echo {
@@ -84,7 +78,7 @@ impl Echo {
     }
 
     /// Ping — returns a Pong response
-    #[plexus_macros::hub_method(description = "Ping — returns a Pong response")]
+    #[plexus_macros::method(description = "Ping — returns a Pong response")]
     async fn ping(&self) -> impl Stream<Item = EchoEvent> + Send + 'static {
         stream! {
             yield EchoEvent::Pong;
