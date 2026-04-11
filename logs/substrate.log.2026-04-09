@@ -1,8 +1,0 @@
-2026-04-09T00:46:48.131874Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:46:48.221426Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:46:48.293971Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:46:50.948581Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:47:00.467342Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:47:00.830260Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:47:01.575582Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
-2026-04-09T00:47:04.614803Z ERROR plexus_registry::activation: Failed to register backend: Failed to register backend: error returned from database: (code: 2067) UNIQUE constraint failed: backends.name
