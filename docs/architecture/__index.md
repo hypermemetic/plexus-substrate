@@ -3,6 +3,7 @@
 ## Start Here
 
 - **[intro-lattice-orcha-tdd.md](intro-lattice-orcha-tdd.md)** — Full stack introduction: Plexus RPC → Lattice → Orcha → TDD node. Read this first.
+- **[Substrate Technical Debt and Architecture Audit](./16670380887168786687_substrate-technical-debt-audit.md)** — 2026-04-16. Current state of the code: patterns that work, coupling debts, stringly-typed concepts, load-bearing panics, missing systems. Starting point for ticketing.
 
 ## Lattice
 
