@@ -7,9 +7,8 @@ use super::ticket_compiler;
 use super::types::*;
 use crate::activations::claudecode::{ClaudeCode, Model};
 use crate::activations::claudecode_loopback::ClaudeCodeLoopback;
-use crate::plexus::{Activation, ChildRouter, ChildSummary, HubContext, NoParent, PlexusError, PlexusStream};
+use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
-use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt;
 use plexus_macros::activation;
@@ -77,16 +76,6 @@ impl<P: HubContext> Orcha<P> {
     #[allow(dead_code)]
     async fn unregister_cancel(&self, graph_id: &str) {
         self.cancel_registry.lock().await.remove(graph_id);
-    }
-
-    /// Child plugin summaries — pm is the only subactivation.
-    pub fn plugin_children(&self) -> Vec<ChildSummary> {
-        let schema = Activation::plugin_schema(&*self.pm);
-        vec![ChildSummary {
-            namespace: schema.namespace,
-            description: schema.description,
-            hash: schema.hash,
-        }]
     }
 
     /// Best-effort startup recovery for graphs that were running when the substrate
@@ -344,30 +333,16 @@ async fn watch_single_graph(
     }
 }
 
-#[async_trait]
-impl<P: HubContext + 'static> ChildRouter for Orcha<P> {
-    fn router_namespace(&self) -> &str {
-        "orcha"
-    }
-
-    async fn router_call(&self, method: &str, params: Value, auth: Option<&plexus_core::plexus::AuthContext>, raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<PlexusStream, PlexusError> {
-            Activation::call(self, method, params, auth, raw_ctx).await
-        }
-
-    async fn get_child(&self, name: &str) -> Option<Box<dyn ChildRouter>> {
-        if name == "pm" {
-            Some(Box::new((*self.pm).clone()))
-        } else {
-            None
-        }
-    }
-}
-
 #[plexus_macros::activation(namespace = "orcha",
 version = "1.0.0",
-description = "Full task orchestration with approval loops and validation",
-hub)]
+description = "Full task orchestration with approval loops and validation")]
 impl<P: HubContext> Orcha<P> {
+    /// Project management subsystem.
+    #[plexus_macros::child]
+    fn pm(&self) -> pm::Pm {
+        (*self.pm).clone()
+    }
+
     /// Run a complete orchestration task
     ///
     /// This is the main entry point for running tasks with the full orcha pattern:
