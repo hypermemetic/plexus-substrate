@@ -1,7 +1,7 @@
 ---
 id: IR-5
 title: "plexus-macros: deprecation metadata capture across activations, methods, fields, and attribute args"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-2]
 unlocks: [IR-6, IR-7]
