@@ -1,7 +1,7 @@
 ---
 id: IR-3
 title: "plexus-macros: emit MethodRole + deprecation on generated MethodSchema"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-2]
 unlocks: [IR-4, IR-8]
