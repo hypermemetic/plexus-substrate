@@ -1,13 +1,23 @@
 ---
 id: IR-S02
 title: "Spike: synapse-cc codegen extensibility"
-status: Pending
+status: Superseded
+superseded_by: IR-7
 type: spike
 blocked_by: []
 unlocks: [IR-7, IR-9]
 severity: High
-target_repo: synapse-cc
+target_repo: hub-codegen
 ---
+
+**Superseded by recon.** Spike question answered by exploration pass:
+
+- **Big correction to the original framing:** synapse-cc (Haskell) is the orchestration layer, but actual code emission lives in `hub-codegen` (Rust) at `~/dev/controlflow/hypermemetic/hub-codegen/`. The IR-7 and IR-9 implementations live in hub-codegen, not synapse-cc.
+- hub-codegen backends: TypeScript (fully), Rust (skeleton stub), Python (not implemented).
+- Method emission: `hub-codegen/src/generator/typescript/namespaces.rs` lines 155–158. Hand-written string building; adding a comment above a method is a two-line addition (field on `MethodDef`, emit in `generate_namespace`).
+- TypeScript's runtime (transport.ts, rpc.ts) is inlined into generated output, not a separate package — simplifies IR-9's framing.
+
+Recon satisfies the spike's pass condition. IR-7 and IR-9 inherit the findings in their Context sections; their `target_repo` corrected to hub-codegen.
 
 ## Question
 

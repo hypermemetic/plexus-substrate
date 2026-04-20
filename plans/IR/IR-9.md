@@ -1,12 +1,12 @@
 ---
 id: IR-9
 title: "synapse-cc: typed-handle codegen for dynamic children (DynamicChild<T> + capability intersections)"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: [IR-3]
 unlocks: []
 severity: High
-target_repo: synapse-cc (+ per-language runtime libraries)
+target_repo: hub-codegen
 ---
 
 ## Problem

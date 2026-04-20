@@ -1,13 +1,24 @@
 ---
 id: IR-S01
 title: "Spike: synapse deprecation rendering viability"
-status: Pending
+status: Superseded
+superseded_by: IR-6
 type: spike
 blocked_by: []
 unlocks: [IR-6]
 severity: High
 target_repo: synapse
 ---
+
+**Superseded by recon.** The spike's question ("can synapse render a per-method deprecation marker without rewriting its tree-rendering pipeline?") was answered by an exploration pass of the synapse repo. Findings:
+
+- Synapse is Haskell / Cabal / GHC 9.6.7.
+- Schema types live in `plexus-protocol` (sibling repo), re-exported via `src/Synapse/Schema/Types.hs`. The deprecation field addition is upstream there, not in synapse itself.
+- `MethodSchema` does not currently carry any deprecation field.
+- Rendering is modular: `renderMethodDoc` in `src/Synapse/Algebra/Render.hs` around line 95 is a per-method function and cleanly extensible. No rewrite of the rendering pipeline required.
+- Test patterns follow `test/ParseSpec.hs` — in-memory Haskell records, no file fixtures needed.
+
+Recon satisfies the spike's pass condition in principle: the hook point exists and is trivially decoratable. IR-6 inherits these findings in its Context section and proceeds directly.
 
 ## Question
 

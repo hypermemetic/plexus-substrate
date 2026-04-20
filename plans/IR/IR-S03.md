@@ -1,13 +1,22 @@
 ---
 id: IR-S03
 title: "Spike: capability-intersection typing viability per target language"
-status: Pending
+status: Superseded
+superseded_by: IR-9
 type: spike
 blocked_by: []
 unlocks: [IR-9]
 severity: High
-target_repo: synapse-cc (per-target-language runtime libraries)
+target_repo: hub-codegen
 ---
+
+**Superseded by recon.** Spike question ("can every target language express `DynamicChild<T> & Listable` with compile-time capability enforcement?") answered by language-level analysis against the backends hub-codegen currently supports:
+
+- **TypeScript** — native `&` intersection operator. Passes trivially.
+- **Rust** — no native intersection; maps to `T: TraitA + TraitB` trait bounds. Passes with different syntax.
+- **Python** — not a hub-codegen backend today. When/if added, Protocol-based design is viable (PEP 544+). Deferred.
+
+All currently-supported backends pass. IR-9 inherits the verdict in its Context. Python's approach is documented as a forward note, not a blocker.
 
 ## Question
 

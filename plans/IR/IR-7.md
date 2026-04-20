@@ -1,12 +1,12 @@
 ---
 id: IR-7
 title: "synapse-cc: track IR version and annotate codegen output consuming deprecated fields"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: [IR-2, IR-5]
 unlocks: []
 severity: Medium
-target_repo: synapse-cc
+target_repo: hub-codegen
 ---
 
 ## Problem
