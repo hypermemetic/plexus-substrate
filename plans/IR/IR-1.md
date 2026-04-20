@@ -79,31 +79,36 @@ struct DeprecationInfo {
 ## Dependency DAG
 
 ```
-                  IR-2
-           (plexus-core: MethodRole
-            + DeprecationInfo types)
-                   │
-            ┌──────┴──────┐
-            ▼             ▼
-         IR-3           IR-5
-     (plexus-macros   (plexus-macros
-      emit role +      deprecation
-      deprecation)     metadata capture)
-            │             │
-            ▼             │
-         IR-4             │
-    (plexus-core          │
-     shim: populate       │
-     children/is_hub)     │
-            │             │
-     ┌──────┼──────┬──────┬──────┐
-     ▼      ▼      ▼      ▼      ▼
-   IR-6   IR-7   IR-8   IR-9  (none)
- (synapse (synapse- (substrate (synapse-
-  inline   cc       Solar       cc typed
-  warn)    deprec.  migrate)   handle
-           annotate)            codegen)
+  IR-S01   IR-S02   IR-S03           IR-2
+ (synapse (syn-cc  (intersection   (plexus-core:
+  render   codegen  typing per     MethodRole +
+  spike)   spike)   language)      DeprecationInfo)
+    │        │        │               │
+    │        │        │        ┌──────┴──────┐
+    │        │        │        ▼             ▼
+    │        │        │     IR-3           IR-5
+    │        │        │  (macros         (macros
+    │        │        │   emit role)     deprecation)
+    │        │        │        │             │
+    │        │        │        ▼             │
+    │        │        │     IR-4             │
+    │        │        │  (plexus-core        │
+    │        │        │   shim)              │
+    │        │        │        │             │
+    ▼        ▼        ▼        │             │
+   IR-6   IR-7+IR-9  IR-9      ▼             │
+                           ┌───┼─────────┬───┘
+                           ▼   ▼         ▼
+                         IR-8 (as above) (consumers run
+                                          in parallel)
 ```
+
+Spikes gate the high-risk implementation tickets:
+- **IR-S01** blocks IR-6 (synapse rendering).
+- **IR-S02** blocks IR-7 and IR-9 (both need synapse-cc emission extensibility).
+- **IR-S03** blocks IR-9 (capability-intersection viability per target language).
+
+Spike execution is parallel (three different investigation axes, no shared files); they must complete before their downstream implementation tickets can be promoted.
 
 - IR-3 and IR-5 both touch `plexus-macros`. They have overlapping file scope — see each ticket's Risks section. Recommendation: land IR-3 first, then IR-5 against the resulting files.
 - IR-6, IR-7, IR-8, IR-9 are independent target repos after IR-3/IR-4/IR-5 land — they can proceed in parallel.
@@ -123,6 +128,9 @@ struct DeprecationInfo {
 | ID | Summary | Target repo | Status |
 |---|---|---|---|
 | IR-1 | This epic overview | — | Epic |
+| IR-S01 | Spike: synapse deprecation rendering viability | synapse | Pending |
+| IR-S02 | Spike: synapse-cc codegen extensibility | synapse-cc | Pending |
+| IR-S03 | Spike: capability-intersection typing viability per target language | synapse-cc | Pending |
 | IR-2 | `MethodRole` + `DeprecationInfo` in plexus-core; extend `MethodSchema` | plexus-core | Pending |
 | IR-3 | plexus-macros emits `MethodRole` + deprecation on generated `MethodSchema` | plexus-macros | Pending |
 | IR-4 | Backward-compat shim: populate deprecated `PluginSchema` fields from methods | plexus-core | Pending |
