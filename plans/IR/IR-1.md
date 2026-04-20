@@ -14,6 +14,8 @@ Reshape the Plexus RPC intermediate representation (IR) around a single concept:
 
 A second concern lands in the same epic: every deprecated IR surface must carry structured deprecation metadata — `since` and `removed_in` version strings plus a human-readable message — and that metadata must propagate through synapse (inline warnings) and synapse-cc (codegen annotations) so consumers can plan migrations.
 
+A third concern, also in this epic: synapse-cc's codegen output for `MethodRole::DynamicChild` must be a first-class typed handle (`DynamicChild<T>` plus opt-in capability interfaces like `Listable` and `Searchable`), not a flat method on the parent client. Callers invoking a capability that the activation didn't opt into get a compile-time error in the target language, not a runtime throw.
+
 ## Context
 
 **Upstream work already landed:**
@@ -94,16 +96,18 @@ struct DeprecationInfo {
      shim: populate       │
      children/is_hub)     │
             │             │
-     ┌──────┼──────┬──────┤
-     ▼      ▼      ▼      ▼
-   IR-6   IR-7   IR-8   (none)
- (synapse (synapse-cc (substrate
-  inline   codegen     Solar
-  warn)    annotate)   migrate)
+     ┌──────┼──────┬──────┬──────┐
+     ▼      ▼      ▼      ▼      ▼
+   IR-6   IR-7   IR-8   IR-9  (none)
+ (synapse (synapse- (substrate (synapse-
+  inline   cc       Solar       cc typed
+  warn)    deprec.  migrate)   handle
+           annotate)            codegen)
 ```
 
 - IR-3 and IR-5 both touch `plexus-macros`. They have overlapping file scope — see each ticket's Risks section. Recommendation: land IR-3 first, then IR-5 against the resulting files.
-- IR-6, IR-7, and IR-8 are independent target repos after IR-4 and IR-5 land — they can proceed in parallel.
+- IR-6, IR-7, IR-8, IR-9 are independent target repos after IR-3/IR-4/IR-5 land — they can proceed in parallel.
+- IR-7 and IR-9 both target synapse-cc but touch different codegen concerns (deprecation annotation emission vs typed-handle generation for dynamic children). They may collide at the file level; check file-boundary disjointness before firing concurrently.
 
 ## Phase Breakdown
 
@@ -126,6 +130,7 @@ struct DeprecationInfo {
 | IR-6 | Synapse surfaces deprecation warnings inline | synapse | Pending |
 | IR-7 | synapse-cc tracks IR version and flags deprecated consumption in codegen | synapse-cc | Pending |
 | IR-8 | Substrate: Solar migrates to method-role IR; tests updated | plexus-substrate | Pending |
+| IR-9 | synapse-cc: typed-handle codegen for dynamic children (`DynamicChild<T>` + capability intersections) | synapse-cc (+ per-language runtime) | Pending |
 
 ## Out of scope
 
@@ -149,7 +154,7 @@ struct DeprecationInfo {
 
 ## Completion
 
-Epic is Complete when IR-2 through IR-8 are all Complete and:
+Epic is Complete when IR-2 through IR-9 are all Complete and:
 
 - `plexus-core` exports `MethodRole` and `DeprecationInfo`; `MethodSchema` carries both.
 - `plexus-macros` emits role-tagged methods and captures `#[deprecated]` on activations, methods, and input-type fields.
