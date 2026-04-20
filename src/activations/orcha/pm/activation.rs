@@ -225,7 +225,7 @@ fn extract_kind_and_label(spec: &NodeSpec) -> (String, Option<String>) {
 
 #[plexus_macros::activation(namespace = "pm",
 version = "1.0.0",
-description = "Project management view of orcha graph execution in ticket vocabulary", crate_path = "plexus_core")]
+description = "Project management view of orcha graph execution in ticket vocabulary")]
 impl Pm {
     /// Get the status of all tickets in a graph.
     #[plexus_macros::method(params(

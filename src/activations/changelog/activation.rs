@@ -64,7 +64,7 @@ impl Changelog {
 
 #[plexus_macros::activation(namespace = "changelog",
 version = "1.0.0",
-description = "Track and document plexus configuration changes", crate_path = "plexus_core")]
+description = "Track and document plexus configuration changes")]
 impl Changelog {
     /// Add a changelog entry for a plexus hash transition
     #[plexus_macros::method(description = "Add a changelog entry documenting a plexus hash change")]

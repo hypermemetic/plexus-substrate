@@ -90,7 +90,7 @@ impl Clone for Mustache {
 /// Hub-macro generates all the boilerplate for this impl block
 #[plexus_macros::activation(namespace = "mustache",
 version = "1.0.0",
-description = "Mustache template rendering for handle values", crate_path = "plexus_core")]
+description = "Mustache template rendering for handle values")]
 impl Mustache {
     /// Render a value using a template
     ///

@@ -37,7 +37,7 @@ impl Default for Interactive {
 /// The `bidirectional` attribute on methods enables server→client requests.
 #[plexus_macros::activation(namespace = "interactive",
 version = "1.0.0",
-description = "Interactive methods demonstrating bidirectional communication", crate_path = "plexus_core")]
+description = "Interactive methods demonstrating bidirectional communication")]
 impl Interactive {
     /// Multi-step setup wizard demonstrating all bidirectional patterns
     ///

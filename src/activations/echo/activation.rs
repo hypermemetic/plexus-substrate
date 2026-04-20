@@ -38,7 +38,7 @@ impl Default for Echo {
 /// - EchoMethod enum with JSON schemas
 #[plexus_macros::activation(namespace = "echo",
 version = "1.0.0",
-description = "Echo messages back - demonstrates plexus-macros usage", crate_path = "plexus_core")]
+description = "Echo messages back - demonstrates plexus-macros usage")]
 impl Echo {
     /// Echo a message back
     #[plexus_macros::method(description = "Echo a message back the specified number of times",

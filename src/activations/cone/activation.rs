@@ -166,7 +166,7 @@ impl<P: HubContext> Cone<P> {
 #[plexus_macros::activation(namespace = "cone",
 version = "1.0.0",
 description = "LLM cone with persistent conversation context",
-resolve_handle, crate_path = "plexus_core")]
+resolve_handle)]
 impl<P: HubContext> Cone<P> {
     /// Create a new cone (LLM agent with persistent conversation context)
     #[plexus_macros::method(params(

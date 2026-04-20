@@ -32,7 +32,7 @@ impl Lattice {
 
 #[plexus_macros::activation(namespace = "lattice",
 version = "1.0.0",
-description = "DAG execution engine — manages graph topology and drives topological execution", crate_path = "plexus_core")]
+description = "DAG execution engine — manages graph topology and drives topological execution")]
 impl Lattice {
     /// Create an empty graph
     #[plexus_macros::method(params(

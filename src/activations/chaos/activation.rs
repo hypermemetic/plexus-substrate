@@ -53,7 +53,7 @@ fn find_pids_by_cmdline(pattern: &str) -> Vec<(u32, String)> {
 
 #[plexus_macros::activation(namespace = "chaos",
 version = "1.0.0",
-description = "Fault injection and observability for anti-fragility testing", crate_path = "plexus_core")]
+description = "Fault injection and observability for anti-fragility testing")]
 impl Chaos {
     /// List all nodes currently in Running state across every lattice graph.
     #[plexus_macros::method(description = "List all Running nodes across all lattice graphs")]

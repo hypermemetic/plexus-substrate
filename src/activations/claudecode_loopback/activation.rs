@@ -40,7 +40,7 @@ impl ClaudeCodeLoopback {
 
 #[plexus_macros::activation(namespace = "loopback",
 version = "1.0.0",
-description = "Route tool permissions to parent for approval", crate_path = "plexus_core")]
+description = "Route tool permissions to parent for approval")]
 impl ClaudeCodeLoopback {
     /// Permission prompt handler - blocks until parent approves/denies
     ///

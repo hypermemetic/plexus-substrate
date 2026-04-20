@@ -366,7 +366,7 @@ impl<P: HubContext + 'static> ChildRouter for Orcha<P> {
 #[plexus_macros::activation(namespace = "orcha",
 version = "1.0.0",
 description = "Full task orchestration with approval loops and validation",
-hub, crate_path = "plexus_core")]
+hub)]
 impl<P: HubContext> Orcha<P> {
     /// Run a complete orchestration task
     ///

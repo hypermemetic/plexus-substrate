@@ -67,7 +67,7 @@ impl Default for Solar {
 #[plexus_macros::activation(namespace = "solar",
 version = "1.0.0",
 description = "Solar system model - demonstrates nested plugin hierarchy",
-hub, crate_path = "plexus_core")]
+hub)]
 impl Solar {
     /// Observe the entire solar system
     #[plexus_macros::method(description = "Get an overview of the solar system")]

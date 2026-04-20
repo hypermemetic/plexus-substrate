@@ -151,7 +151,7 @@ async fn create_event_node(
 #[plexus_macros::activation(namespace = "claudecode",
 version = "1.0.0",
 description = "Manage Claude Code sessions with Arbor-backed conversation history",
-resolve_handle, crate_path = "plexus_core")]
+resolve_handle)]
 impl<P: HubContext> ClaudeCode<P> {
     /// Create a new Claude Code session
     #[plexus_macros::method(params(

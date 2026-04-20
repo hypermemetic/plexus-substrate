@@ -43,7 +43,7 @@ impl Default for Bash {
 
 #[plexus_macros::activation(namespace = "bash",
 version = "1.0.0",
-description = "Execute bash commands and stream output", crate_path = "plexus_core")]
+description = "Execute bash commands and stream output")]
 impl Bash {
     /// Execute a bash command and stream stdout, stderr, and exit code
     #[plexus_macros::method]

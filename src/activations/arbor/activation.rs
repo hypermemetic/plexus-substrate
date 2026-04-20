@@ -77,7 +77,7 @@ impl Arbor<NoParent> {
 
 #[plexus_macros::activation(namespace = "arbor",
 version = "1.0.0",
-description = "Manage conversation trees with context tracking", crate_path = "plexus_core")]
+description = "Manage conversation trees with context tracking")]
 impl<P: HubContext> Arbor<P> {
     /// Create a new conversation tree
     #[plexus_macros::method(params(
