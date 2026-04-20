@@ -11,9 +11,12 @@ target_repo: plexus-macros
 
 ## Problem
 
-CHILD-8 synthesizes `plugin_children()` from static `#[plexus_macros::child]` methods. When an author needs a different source (e.g., Solar computes summaries from runtime config), today's escape hatch is to hand-write `fn plugin_children(&self) -> Vec<ChildSummary>` on the impl and rely on the macro's "already defined" detection. That works but it leaks macro-contract knowledge: the author has to know that a free-standing method with this specific name silently overrides synthesis. There's no declarative signal to the macro, and a typo in the method name silently falls back to synthesis without warning.
+CHILD-8 synthesizes `plugin_children()` from static `#[plexus_macros::child]` methods. When an author needs a different source (e.g., Solar computes summaries from runtime config), today's escape hatch is to hand-write `fn plugin_children(&self) -> Vec<ChildSummary>` on the impl and rely on the macro's "already defined" detection. That works but it is magical in the worst way: a method with a specific name silently overrides synthesis, a typo falls back to synthesis with empty hashes, and a reader has to know the unwritten macro contract to understand why the method exists.
 
-The override should be explicit: a macro attribute that names the method (or provides the output directly), so the macro knows exactly what's happening and can validate signatures.
+Fix it two ways:
+
+1. Make the override declarative via a macro attribute. The macro sees the attribute, validates the target, emits a clear error on mismatch.
+2. **Reserve the function name `plugin_children`.** Writing `fn plugin_children(&self)` without the explicit override attribute produces a compile error naming the macro extension to apply. No more silent, name-matching override.
 
 ## Context
 
@@ -70,13 +73,15 @@ Macro-expansion rules:
 
 | Condition | Outcome |
 |---|---|
-| No `summaries` referenced, no hand-written `fn plugin_children` | Macro synthesizes from static `#[child]` methods (unchanged CHILD-8 behavior). |
+| No `summaries` referenced, no `fn plugin_children` present | Macro synthesizes from static `#[child]` methods (unchanged CHILD-8 behavior). |
 | `summaries = "name"` on activation attr or `#[child(summaries = "name")]` | Macro validates the named method exists in the same impl with signature returning `Vec<ChildSummary>` (sync or async), emits `self.name()` as the summary source. Synthesis skipped. |
 | `#[plexus_macros::child_summaries]` on a method | Discovered automatically; same effect as Shape 1. |
-| Hand-written `fn plugin_children(&self) -> Vec<ChildSummary>` AND any of the explicit overrides | Compile error — forces the author to pick one canonical source. |
+| A method named `plugin_children` exists on the impl and **none of the explicit override shapes** references it | **Compile error** with the exact wording: `"\`plugin_children\` is a reserved function name on activations. If you meant to override the synthesized plugin_children, apply #[plexus_macros::child_summaries] above this method."` |
+| A method named `plugin_children` exists on the impl AND IS referenced by one of the override shapes | Permitted — the author explicitly opted in via the macro contract. |
 | Referenced method doesn't exist, or signature wrong | Clear compile error. |
+| Multiple of Shapes 1/2/3 present on the same impl | Compile error — force the author to pick one canonical source. |
 
-Existing hand-written `fn plugin_children` continues to suppress synthesis (backward compat — all current Solar-style overrides keep working). A lint-level warning is emitted suggesting the explicit override shapes, but it does not error.
+`plugin_children` is reserved. There is no silent name-matching override. CHILD-7's Solar, which currently hand-writes `fn plugin_children(&self) -> Vec<ChildSummary>` without the explicit attribute, will stop compiling until it is updated to use one of the three override shapes. That migration lands in the same PR as this ticket.
 
 ## Risks
 
@@ -84,25 +89,28 @@ Existing hand-written `fn plugin_children` continues to suppress synthesis (back
 |---|---|
 | Three shapes is three things to document | Rustdoc on `#[plexus_macros::child]` enumerates them and the "when to use which" guidance. |
 | Shape 3 (`summaries = "name"` on `#[child]`) creates the illusion that the referenced method is per-child instead of whole-impl | Doc: the referenced method produces the summaries for the ENTIRE impl, not just that `#[child]`. It's just placed near the child it most naturally describes. |
-| The deprecation warning on hand-written `fn plugin_children` breaks existing test expectations | Ensure the warning is suppressible via `#[allow(...)]` and doesn't flip CI red. |
+| Reserving `plugin_children` breaks CHILD-7's Solar migration | Solar migration to Shape 3 (`#[child(summaries = "plugin_children")]` or rename to `body_summaries` + one of the shapes) is included in this ticket, not deferred. |
+| Other activations outside substrate that named a method `plugin_children` by coincidence | This is a plexus-macros-level contract — applies only to impls under `#[plexus_macros::activation]`. Free-standing methods on non-activation structs are unaffected. |
 
 ## What must NOT change
 
-- Existing Solar-style `fn plugin_children(&self)` hand-written overrides continue to work (with a lint warning nudging toward the explicit form).
-- CHILD-8's synthesis path continues to apply when no override is present.
-- All CHILD-3 / CHILD-4 / CHILD-7 / CHILD-8 fixtures pass.
-- Substrate `cargo build --workspace` passes with zero edits.
+- CHILD-8's synthesis path continues to apply when no override is present and no method named `plugin_children` exists.
+- All CHILD-3 / CHILD-4 / CHILD-7 / CHILD-8 fixtures pass — CHILD-7 may require a one-line update to the Solar migration to use the new explicit override attribute (done in this ticket).
+- Substrate `cargo build --workspace` passes after Solar's one-line update.
+- Free-standing methods named `plugin_children` on structs outside an `#[plexus_macros::activation]` impl are unaffected.
 
 ## Acceptance criteria
 
 1. `cargo build -p plexus-macros` and `cargo test -p plexus-macros` succeed.
 2. Fixtures for each of Shapes 1, 2, 3 produce identical generated `plugin_schema` given identical summary methods.
-3. A fixture combining an explicit override with `fn plugin_children` fails to compile with a clear error.
-4. A fixture referencing a nonexistent method (`summaries = "typo"`) fails to compile with a clear error.
-5. A lint warning fires on activations still using the hand-written `fn plugin_children` pattern. Warning text suggests the explicit attribute.
-6. CHILD-7's Solar (currently using hand-written `fn plugin_children`) continues to compile; the lint warning can be silenced or migrated to Shape 3.
-7. Substrate workspace builds clean.
+3. A trybuild fixture with a method named `plugin_children` on a `#[plexus_macros::activation]` impl, and no explicit override attribute referencing it, fails to compile. The error message contains the exact phrase `` `plugin_children` is a reserved function name on activations `` and names `#[plexus_macros::child_summaries]` as the fix.
+4. A fixture combining two of Shapes 1/2/3 on the same impl fails to compile with an error naming the ambiguity.
+5. A fixture referencing a nonexistent method (`summaries = "typo"`) fails to compile with a clear error.
+6. A fixture where `#[plexus_macros::child_summaries]` is placed on a method named `plugin_children` compiles and works — reserved-name check is about opt-in, not the name itself.
+7. CHILD-7's Solar migration is updated in this ticket's PR to use one of the three override shapes. The migration is a single-file diff on `src/activations/solar/activation.rs` plus whatever fixture and doc changes accompany it.
+8. Substrate `cargo build --workspace` and `cargo test -p plexus-substrate` pass after Solar is updated.
+9. A free-standing `fn plugin_children(&self)` on a struct that is NOT under `#[plexus_macros::activation]` (e.g., a helper or unrelated type) compiles without any macro intervention.
 
 ## Completion
 
-PR against plexus-macros. CI green. Status flipped to Complete in the same commit. Optionally, a follow-up substrate PR migrates Solar from hand-written `fn plugin_children` to Shape 3 (`#[child(summaries = "body_summaries")]`) — out of scope for this ticket.
+PR(s) against `plexus-macros` and `plexus-substrate`. Plexus-macros changes land the reserved-name check and the three override shapes. Substrate changes update Solar to use the new shape. CI green on both. Status flipped to Complete in the same commit as the plexus-macros code.
