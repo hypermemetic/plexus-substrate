@@ -1,7 +1,7 @@
 ---
 id: IR-9
 title: "synapse-cc: typed-handle codegen for dynamic children (DynamicChild<T> + capability intersections)"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-3]
 unlocks: []
