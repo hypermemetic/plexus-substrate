@@ -1,7 +1,7 @@
 ---
 id: IR-4
 title: "Backward-compat shim: populate deprecated PluginSchema fields from methods"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-2, IR-3]
 unlocks: [IR-6, IR-7, IR-8]
