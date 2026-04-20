@@ -1,7 +1,7 @@
 ---
 id: CHILD-6
 title: "crate_path default via proc-macro-crate; drop per-activation boilerplate"
-status: Pending
+status: Complete
 type: implementation
 blocked_by: []
 unlocks: [CHILD-7]

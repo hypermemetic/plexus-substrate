@@ -1,7 +1,7 @@
 ---
 id: CHILD-2
 title: "Extend ChildRouter trait: capabilities + opt-in list/search"
-status: Pending
+status: Complete
 type: implementation
 blocked_by: []
 unlocks: [CHILD-3]

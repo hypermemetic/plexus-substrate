@@ -1,7 +1,7 @@
 ---
 id: CHILD-3
 title: "Basic #[plexus_macros::child] method attribute"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: [CHILD-2]
 unlocks: [CHILD-4, CHILD-7]

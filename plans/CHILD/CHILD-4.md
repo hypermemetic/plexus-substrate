@@ -1,7 +1,7 @@
 ---
 id: CHILD-4
 title: "list = / search = attribute args and ChildCapabilities bitflags"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: [CHILD-3]
 unlocks: [CHILD-7]

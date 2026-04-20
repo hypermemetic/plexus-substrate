@@ -1,7 +1,7 @@
 ---
 id: CHILD-7
 title: "Migrate substrate Solar activation to #[child] method attribute"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: [CHILD-3, CHILD-4, CHILD-5, CHILD-6]
 unlocks: []

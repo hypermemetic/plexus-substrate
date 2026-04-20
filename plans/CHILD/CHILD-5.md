@@ -1,7 +1,7 @@
 ---
 id: CHILD-5
 title: "Doc-comment extraction for activation/method/child descriptions"
-status: Pending
+status: Complete
 type: implementation
 blocked_by: []
 unlocks: [CHILD-7]
