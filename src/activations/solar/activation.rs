@@ -6,6 +6,23 @@
 //! - Planets contain moons
 //!
 //! Each level implements the F-coalgebra structure map via `plugin_schema()`.
+//!
+//! # IR-8: module-level `#![allow(deprecated)]`
+//!
+//! Solar's hand-written `plugin_children()` is `#[deprecated]` (IR-8) so
+//! downstream Rust callers get migration nudges. The
+//! `#[plexus_macros::activation]` macro, however, synthesizes its own
+//! `impl Activation for Solar` in this module whose generated
+//! `plugin_schema()` body calls `self.plugin_children()` directly — that
+//! macro output isn't annotated with `#[allow(deprecated)]` so the
+//! substrate build would otherwise emit a spurious warning originating at
+//! the macro invocation site (IR-8 AC #4 forbids that).
+//!
+//! Suppressing at module scope is the narrowest non-invasive fix:
+//! plexus-macros lives in a separate repo and IR-8 is not permitted to
+//! modify it. When HASH-1 removes the hand-written override, this
+//! `#![allow(deprecated)]` can be deleted.
+#![allow(deprecated)]
 
 use super::celestial::{build_solar_system, CelestialBody, CelestialBodyActivation};
 use super::types::{BodyType, SolarEvent};
@@ -135,6 +152,18 @@ impl Solar {
     /// the deterministic digest computed from that planet's own sub-schema.
     /// The macro's synthesis path only covers static `#[child]` methods and
     /// would emit empty-string hashes; Solar's children are dynamic.
+    ///
+    /// # Deprecated (IR-8)
+    ///
+    /// This override remains load-bearing until hashes move to the runtime
+    /// (HASH-1). It is annotated as `#[deprecated]` so the compile-time
+    /// warning nudges callers migrating to the role-tagged schema. The body
+    /// is unchanged from its pre-IR-8 definition.
+    #[deprecated(
+        since = "0.5",
+        note = "Solar's children are derivable from #[child]-tagged methods. This override is retained for backward compatibility until plugin_children is removed from the schema."
+    )]
+    #[plexus_macros::removed_in("0.6")]
     pub fn plugin_children(&self) -> Vec<ChildSummary> {
         self.system.children.iter()
             .map(|planet| planet.to_child_summary())
@@ -145,36 +174,155 @@ impl Solar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plexus::{Activation, DynamicHub};
+    use crate::plexus::{Activation, DynamicHub, MethodRole};
+
+    /// Predicate: is this method a child-gate (i.e., non-Rpc role)?
+    ///
+    /// `MethodRole` is `#[non_exhaustive]` (IR-2). Explicit match arms cover
+    /// the known child-gate variants; the catch-all treats unknown future
+    /// roles as non-child, which is the conservative default.
+    fn is_child_role(role: &MethodRole) -> bool {
+        matches!(
+            role,
+            MethodRole::StaticChild | MethodRole::DynamicChild { .. }
+        )
+    }
 
     #[test]
-    fn solar_is_hub_with_planets() {
+    fn solar_is_hub_with_planets_via_role() {
         let solar = Solar::new();
         let schema = solar.plugin_schema();
 
-        assert!(schema.is_hub(), "solar should be a hub");
-        let children = schema.children.as_ref().expect("solar should have children");
-        assert_eq!(children.len(), 8, "solar should have 8 planets");
+        // IR-8: Solar is a hub by virtue of its role-tagged #[child] method,
+        // not the legacy `children` side-table.
+        assert!(
+            schema.is_hub_by_role(),
+            "solar should be a hub via MethodRole"
+        );
 
-        // Children are summaries - check namespace and description
-        let jupiter = children.iter().find(|c| c.namespace == "jupiter").unwrap();
+        // Solar declares exactly one child-gate (`body`), tagged DynamicChild.
+        let child_methods: Vec<&_> = schema
+            .methods
+            .iter()
+            .filter(|m| is_child_role(&m.role))
+            .collect();
+        assert_eq!(
+            child_methods.len(),
+            1,
+            "solar should have exactly one role-tagged child method; got {child_methods:?}"
+        );
+        let body = child_methods[0];
+        assert_eq!(body.name, "body", "the child-gate method should be `body`");
+        assert!(
+            matches!(body.role, MethodRole::DynamicChild { .. }),
+            "`body` must be DynamicChild; got {:?}",
+            body.role
+        );
+
+        // The hand-written `plugin_children()` override still surfaces the 8
+        // configured planets and is the source of per-planet hashes. This is
+        // independent of the schema surface IR-8 migrates.
+        #[allow(deprecated)]
+        let planets = solar.plugin_children();
+        assert_eq!(planets.len(), 8, "solar should have 8 configured planets");
+        let jupiter = planets
+            .iter()
+            .find(|c| c.namespace == "jupiter")
+            .expect("jupiter planet should be present");
         assert!(jupiter.description.contains("planet"));
         assert!(!jupiter.hash.is_empty());
     }
 
+    // DynamicHub aggregates registered activations via the legacy `children`
+    // field (no role-tagged methods). Until DynamicHub learns to emit role
+    // tags for its registrants, this test intentionally reads the legacy
+    // field under `#[allow(deprecated)]`.
     #[test]
+    #[allow(deprecated)]
     fn solar_registered_with_dynamic_hub() {
         let hub = DynamicHub::new("plexus").register(Solar::new());
         let schema = hub.plugin_schema();
 
-        // DynamicHub is a hub
-        assert!(schema.is_hub());
-        let children = schema.children.as_ref().unwrap();
+        // DynamicHub exposes registered activations through its legacy
+        // children list — not role-tagged methods. Assert via the field
+        // that is still its source of truth.
+        let children = schema
+            .children
+            .as_ref()
+            .expect("DynamicHub should report registered activations as children");
 
-        // Solar should be one of the children (as a summary)
-        let solar = children.iter().find(|c| c.namespace == "solar").unwrap();
+        let solar = children
+            .iter()
+            .find(|c| c.namespace == "solar")
+            .expect("solar should be registered under DynamicHub");
         assert!(solar.description.contains("Solar system"));
         assert!(!solar.hash.is_empty());
+    }
+
+    // IR-8 AC #6: the derived query returns the same hub-ness Solar had
+    // before the migration. Deliberately separate from the field-access
+    // assertions so downstream consumers have a compact, role-only fixture.
+    #[test]
+    fn solar_is_hub_by_role_returns_true() {
+        let solar = Solar::new();
+        assert!(
+            solar.plugin_schema().is_hub_by_role(),
+            "Solar must be a hub by MethodRole (IR-8 AC #6)"
+        );
+    }
+
+    // IR-8 AC #6: the count of child-gate methods matches the number of
+    // `#[child]`-annotated methods on Solar (currently 1: `body`).
+    #[test]
+    fn solar_has_one_child_gate_method_by_role() {
+        let solar = Solar::new();
+        let schema = solar.plugin_schema();
+        let gate_count = schema
+            .methods
+            .iter()
+            .filter(|m| is_child_role(&m.role))
+            .count();
+        assert_eq!(
+            gate_count, 1,
+            "Solar should report exactly one non-Rpc role-tagged method"
+        );
+    }
+
+    // IR-8 AC #3: verify the source-level deprecation annotations on the
+    // hand-written `plugin_children` override are present. This is a
+    // source-text assertion because `plugin_children` is not a `#[method]`
+    // and therefore does not surface through `PluginSchema` metadata.
+    #[test]
+    fn plugin_children_is_source_annotated_deprecated() {
+        let src = include_str!("activation.rs");
+        // Locate the function definition and verify both companion
+        // attributes precede it on the same item.
+        let fn_pos = src
+            .find("pub fn plugin_children(&self)")
+            .expect("plugin_children definition must be present");
+        let preamble = &src[..fn_pos];
+
+        // Grab the last attribute-block bounded by the preceding blank line
+        // (the method's attribute list), so we only inspect attrs on this
+        // specific function.
+        let block_start = preamble
+            .rfind("\n\n")
+            .map(|i| i + 2)
+            .unwrap_or(0);
+        let attr_block = &preamble[block_start..];
+
+        assert!(
+            attr_block.contains("#[deprecated("),
+            "plugin_children must carry #[deprecated(...)] (IR-8 AC #3)"
+        );
+        assert!(
+            attr_block.contains("since = \"0.5\""),
+            "plugin_children must declare `since = \"0.5\"` (IR-8 AC #3)"
+        );
+        assert!(
+            attr_block.contains("#[plexus_macros::removed_in(\"0.6\")]"),
+            "plugin_children must carry #[plexus_macros::removed_in(\"0.6\")] (IR-8 AC #3)"
+        );
     }
 
     #[test]
