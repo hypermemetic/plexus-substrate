@@ -1,7 +1,7 @@
 ---
 id: IR-2
 title: "plexus-core: add MethodRole + DeprecationInfo; extend MethodSchema"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: []
 unlocks: [IR-3, IR-5]
