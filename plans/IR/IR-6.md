@@ -1,7 +1,7 @@
 ---
 id: IR-6
 title: "synapse: surface deprecation warnings inline in the CLI"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-4, IR-5]
 unlocks: []
