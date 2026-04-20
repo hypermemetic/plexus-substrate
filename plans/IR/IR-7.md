@@ -1,7 +1,7 @@
 ---
 id: IR-7
 title: "synapse-cc: track IR version and annotate codegen output consuming deprecated fields"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-2, IR-5]
 unlocks: []
