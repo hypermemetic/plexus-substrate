@@ -1,13 +1,16 @@
 ---
 id: CHILD-10
 title: "Explicit plugin_children override as a child macro extension"
-status: Pending
+status: Superseded
+superseded_by: IR-1
 type: implementation
 blocked_by: []
 unlocks: []
 severity: Medium
 target_repo: plexus-macros
 ---
+
+**Superseded by [IR-1](../IR/IR-1.md).** The unifying IR epic removes `plugin_children` from the schema entirely, obviating the override concept this ticket designed.
 
 ## Problem
 

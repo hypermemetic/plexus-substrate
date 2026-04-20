@@ -32,10 +32,16 @@ None of these hold for remote, dynamic, or policy-gated children. A schema's bak
 - Parents aggregate: walk children via `ChildRouter`, call `plugin_hash()` on each, collect successful responses, sort deterministically (by name), aggregate (e.g., hash the sorted `(name, hash)` pairs).
 - Failing child call (timeout, error, `None`, not-reachable) → that child is omitted from the aggregate. The parent's aggregate still commits.
 
+**Relationship to IR epic:** The [IR epic (IR-1)](../IR/IR-1.md) supersedes the schema surgery portion of HASH — reshaping `PluginSchema` / `ChildSummary` and introducing deprecation metadata now lives in IR. What remains in HASH is the runtime `plugin_hash()` aggregation story: trait method on activations, tolerant aggregator over `ChildRouter`, and the demo that proves missing children don't stall the aggregate. HASH-S01's decision narrows accordingly — the "option vs remove" framing is absorbed into IR's `DeprecationInfo { since, removed_in }` convention; HASH-S01 now only pins the runtime contract for `plugin_hash()`.
+
 ## Dependency DAG
 
 ```
-         HASH-S01 (spike: ChildSummary schema migration)
+         IR-1 (handles ChildSummary schema surgery + deprecation)
+                 │
+                 ▼
+         HASH-S01 (spike: runtime plugin_hash contract only;
+                    schema-field deprecation inherited from IR)
                  │
                  ▼
             HASH-2 (plexus-core: add plugin_hash + aggregate_hash)
@@ -53,12 +59,13 @@ None of these hold for remote, dynamic, or policy-gated children. A schema's bak
                  ▼
              HASH-6
          (retire schema-
-          baked hashes,
-          bump minor
-          version)
+          baked hashes —
+          follows IR's
+          DeprecationInfo
+          removed_in plan)
 ```
 
-HASH-S01 resolves whether `ChildSummary.hash` becomes `Option<String>` (backward-compatible) or is removed (breaking). That decision gates the shape of HASH-2 onward.
+HASH-S01 originally owned the "option vs remove" decision for `ChildSummary.hash`. That decision is now inherited from IR's uniform deprecation convention (`DeprecationInfo { since, removed_in }` — see IR-1). HASH-S01's narrowed scope: pin the runtime contract for `plugin_hash()` and tolerant aggregation. HASH-6's retirement schedule follows the `removed_in` plan IR encodes per field; it is no longer an independent version-bump decision.
 
 ## Phase Breakdown
 
