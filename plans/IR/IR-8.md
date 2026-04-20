@@ -1,7 +1,7 @@
 ---
 id: IR-8
 title: "Substrate: Solar migrates tests to method-role IR; mark plugin_children deprecated"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [IR-3, IR-4]
 unlocks: []

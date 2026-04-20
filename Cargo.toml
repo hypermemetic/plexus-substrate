@@ -1,6 +1,6 @@
 [package]
 name = "plexus-substrate"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Reference Plexus RPC server with conversation trees and LLM orchestration"
 license = "AGPL-3.0-only"
@@ -61,8 +61,8 @@ dialectic = { version = "0.4.1", features = ["tokio"] }
 # MCP server via rmcp
 rmcp = { version = "0.12", features = ["server", "transport-io", "transport-streamable-http-server"] }
 cllient = "0.2.1"
-plexus-macros = "0.4"
-plexus-core = "0.4"
+plexus-macros = "0.5"
+plexus-core = "0.5"
 plexus-transport = { version = "0.2", features = ["mcp-gateway"] }
 hyperforge = "4.0.0"
 # plexus-jsexec = "0.1.0"  # temporarily disabled - needs API updates
