@@ -20,7 +20,15 @@ pub type ClaudeCodeId = Uuid;
 /// Handles reference data stored in the ClaudeCode database and can be embedded
 /// in Arbor tree nodes for external resolution.
 #[derive(Debug, Clone, HandleEnum)]
-#[handle(plugin_id = "ClaudeCode::PLUGIN_ID", version = "1.0.0")]
+#[handle(
+    plugin_id = "ClaudeCode::PLUGIN_ID",
+    // Pin the concrete instantiation of the generic
+    // `ClaudeCode<P: HubContext = NoParent>` activation so codegen emits
+    // `<ClaudeCode<NoParent>>::PLUGIN_ID` and rustc can resolve the
+    // associated constant without ambiguity (IR-21).
+    plugin_id_type = "ClaudeCode<::plexus_core::plexus::NoParent>",
+    version = "1.0.0"
+)]
 pub enum ClaudeCodeHandle {
     /// Handle to a message in the claudecode database
     /// Format: `{plugin_id}@1.0.0::chat:msg-{uuid}:{role}:{name}`

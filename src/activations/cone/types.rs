@@ -18,7 +18,14 @@ pub type ConeId = Uuid;
 /// Handles reference data stored in the Cone database and can be embedded
 /// in Arbor tree nodes for external resolution.
 #[derive(Debug, Clone, HandleEnum)]
-#[handle(plugin_id = "Cone::PLUGIN_ID", version = "1.0.0")]
+#[handle(
+    plugin_id = "Cone::PLUGIN_ID",
+    // Pin the concrete instantiation of the generic `Cone<P: HubContext = NoParent>`
+    // activation so codegen emits `<Cone<NoParent>>::PLUGIN_ID` and rustc can
+    // resolve the associated constant without ambiguity (IR-21).
+    plugin_id_type = "Cone<::plexus_core::plexus::NoParent>",
+    version = "1.0.0"
+)]
 pub enum ConeHandle {
     /// Handle to a message in the cone database
     /// Format: `{plugin_id}@1.0.0::chat:msg-{uuid}:{role}:{name}`
