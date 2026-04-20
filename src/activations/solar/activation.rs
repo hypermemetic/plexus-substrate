@@ -9,9 +9,8 @@
 
 use super::celestial::{build_solar_system, CelestialBody, CelestialBodyActivation};
 use super::types::{BodyType, SolarEvent};
-use crate::plexus::{Activation, ChildRouter, ChildSummary};
+use crate::plexus::ChildSummary;
 use async_stream::stream;
-use async_trait::async_trait;
 use futures::Stream;
 
 /// Solar system activation - demonstrates nested plugin children
@@ -64,13 +63,11 @@ impl Default for Solar {
     }
 }
 
-#[plexus_macros::activation(namespace = "solar",
-version = "1.0.0",
-description = "Solar system model - demonstrates nested plugin hierarchy",
-hub)]
+/// Solar system model - demonstrates nested plugin hierarchy
+#[plexus_macros::activation(namespace = "solar", version = "1.0.0")]
 impl Solar {
-    /// Observe the entire solar system
-    #[plexus_macros::method(description = "Get an overview of the solar system")]
+    /// Get an overview of the solar system
+    #[plexus_macros::method]
     async fn observe(&self) -> impl Stream<Item = SolarEvent> + Send + 'static {
         let star = self.system.name.clone();
         let planet_count = self.system.children.len();
@@ -87,9 +84,9 @@ impl Solar {
         }
     }
 
-    /// Get information about a specific celestial body
-    #[plexus_macros::method(description = "Get detailed information about a celestial body",
-    params(path = "Path to the body (e.g., 'earth', 'jupiter.io', 'saturn.titan')"))]
+    /// Get detailed information about a celestial body at `path`
+    /// (e.g., `"earth"`, `"jupiter.io"`, `"saturn.titan"`).
+    #[plexus_macros::method]
     async fn info(
         &self,
         path: String,
@@ -110,34 +107,38 @@ impl Solar {
         }
     }
 
-    /// Get child plugin summaries (planets as children of solar system)
+    /// Look up a celestial body by name (case-insensitive).
+    #[plexus_macros::child(list = "body_names")]
+    async fn body(&self, name: &str) -> Option<CelestialBodyActivation> {
+        let normalized = name.to_lowercase();
+        self.system
+            .children
+            .iter()
+            .find(|c| c.name.to_lowercase() == normalized)
+            .map(|c| CelestialBodyActivation::new(c.clone()))
+    }
+
+    /// Stream the configured planet names for `ChildRouter::list_children`.
+    async fn body_names(&self) -> impl Stream<Item = String> + Send + '_ {
+        let names: Vec<String> = self
+            .system
+            .children
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        futures::stream::iter(names)
+    }
+
+    /// Hand-written child summary list.
+    ///
+    /// Preserved (not macro-synthesized) so each planet's `hash` field carries
+    /// the deterministic digest computed from that planet's own sub-schema.
+    /// The macro's synthesis path only covers static `#[child]` methods and
+    /// would emit empty-string hashes; Solar's children are dynamic.
     pub fn plugin_children(&self) -> Vec<ChildSummary> {
         self.system.children.iter()
             .map(|planet| planet.to_child_summary())
             .collect()
-    }
-}
-
-/// ChildRouter implementation for nested method routing
-///
-/// This enables calls like `solar.mercury.info` to route through
-/// Solar → Mercury → info method.
-#[async_trait]
-impl ChildRouter for Solar {
-    fn router_namespace(&self) -> &str {
-        "solar"
-    }
-
-    async fn router_call(&self, method: &str, params: serde_json::Value, auth: Option<&plexus_core::plexus::AuthContext>, raw_ctx: Option<&plexus_core::request::RawRequestContext>) -> Result<crate::plexus::PlexusStream, crate::plexus::PlexusError> {
-            // Delegate to Activation::call which handles local methods + nested routing
-            Activation::call(self, method, params, auth, raw_ctx).await
-        }
-
-    async fn get_child(&self, name: &str) -> Option<Box<dyn ChildRouter>> {
-        let normalized = name.to_lowercase();
-        self.system.children.iter()
-            .find(|c| c.name.to_lowercase() == normalized)
-            .map(|c| Box::new(CelestialBodyActivation::new(c.clone())) as Box<dyn ChildRouter>)
     }
 }
 
@@ -199,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn test_nested_routing_mercury() {
         let solar = Solar::new();
-        let result = Activation::call(&solar, "mercury.info", serde_json::json!({})).await;
+        let result = Activation::call(&solar, "mercury.info", serde_json::json!({}), None, None).await;
         assert!(result.is_ok(), "mercury.info should be callable: {:?}", result.err());
     }
 
@@ -208,7 +209,7 @@ mod tests {
         let solar = Solar::new();
 
         // Call solar.call("jupiter.io.info", {}) - should route jupiter → io
-        let result = Activation::call(&solar, "jupiter.io.info", serde_json::json!({})).await;
+        let result = Activation::call(&solar, "jupiter.io.info", serde_json::json!({}), None, None).await;
         assert!(result.is_ok(), "jupiter.io.info should be callable");
     }
 
@@ -217,7 +218,7 @@ mod tests {
         let solar = Solar::new();
 
         // Call solar.call("earth.luna.info", {}) - should route earth → luna
-        let result = Activation::call(&solar, "earth.luna.info", serde_json::json!({})).await;
+        let result = Activation::call(&solar, "earth.luna.info", serde_json::json!({}), None, None).await;
         assert!(result.is_ok(), "earth.luna.info should be callable");
     }
 
@@ -226,7 +227,59 @@ mod tests {
         let solar = Solar::new();
 
         // Call with invalid child
-        let result = Activation::call(&solar, "pluto.info", serde_json::json!({})).await;
+        let result = Activation::call(&solar, "pluto.info", serde_json::json!({}), None, None).await;
         assert!(result.is_err(), "pluto.info should fail - not a planet");
+    }
+
+    // CHILD-7: `list_children` capability exposes configured planet names.
+    #[tokio::test]
+    async fn solar_list_children_returns_configured_planets() {
+        use crate::plexus::ChildRouter;
+        use futures::StreamExt;
+
+        let solar = Solar::new();
+        let listed: Vec<String> = solar
+            .list_children()
+            .await
+            .expect("list_children must be Some for Solar (CHILD-4 opt-in)")
+            .collect()
+            .await;
+
+        assert!(!listed.is_empty(), "list_children must yield at least one name");
+        assert_eq!(listed.len(), 8, "Solar has 8 configured planets");
+        for expected in [
+            "Mercury", "Venus", "Earth", "Mars",
+            "Jupiter", "Saturn", "Uranus", "Neptune",
+        ] {
+            assert!(
+                listed.iter().any(|n| n == expected),
+                "list_children should include {expected}; got {listed:?}"
+            );
+        }
+    }
+
+    // CHILD-7: case-insensitive child lookup is preserved through the
+    // migrated `#[child]` method body.
+    #[tokio::test]
+    async fn solar_get_child_case_insensitive() {
+        use crate::plexus::ChildRouter;
+
+        let solar = Solar::new();
+        assert!(
+            solar.get_child("Mercury").await.is_some(),
+            "`Mercury` should resolve"
+        );
+        assert!(
+            solar.get_child("mercury").await.is_some(),
+            "`mercury` should resolve (case-insensitive)"
+        );
+        assert!(
+            solar.get_child("MERCURY").await.is_some(),
+            "`MERCURY` should resolve (case-insensitive)"
+        );
+        assert!(
+            solar.get_child("pluto").await.is_none(),
+            "`pluto` should not resolve"
+        );
     }
 }
