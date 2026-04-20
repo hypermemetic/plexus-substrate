@@ -1,7 +1,7 @@
 ---
 id: CHILD-8
 title: "Infer hub-mode from #[child] methods (hub flag + ChildRouter + plugin_children)"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: []
 unlocks: [CHILD-7]
