@@ -1,7 +1,7 @@
 ---
 id: HF-0
 title: "hyperforge: unbreak the build (plexus-core 0.4 → 0.5 dual-version conflict)"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: []
 unlocks: [HF-DC-1]
