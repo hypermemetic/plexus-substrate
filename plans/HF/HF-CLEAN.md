@@ -1,7 +1,7 @@
 ---
 id: HF-CLEAN
 title: "hyperforge: zero deprecations, zero warnings, then stricter lints"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: [HF-0]
 unlocks: []
