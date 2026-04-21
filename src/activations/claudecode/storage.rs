@@ -466,6 +466,39 @@ impl ClaudeCodeStorage {
         Ok(())
     }
 
+    /// Check if a session with this ID exists.
+    ///
+    /// Used by the `session` child gate on `ClaudeCode` (IR-18) to reject
+    /// routing to a nonexistent session without materializing the full
+    /// `ClaudeCodeConfig`.
+    pub async fn session_exists(&self, session_id: &ClaudeCodeId) -> Result<bool, ClaudeCodeError> {
+        let row = sqlx::query("SELECT 1 as present FROM claudecode_sessions WHERE id = ?")
+            .bind(session_id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| db_err("check session exists", e))?;
+        Ok(row.is_some())
+    }
+
+    /// Enumerate every session ID known to storage.
+    ///
+    /// Used by the `session_ids` list-method on `ClaudeCode` (IR-18) to
+    /// populate the `ChildRouter::list_children` stream under the
+    /// `#[plexus_macros::child(list = "session_ids")]` opt-in.
+    pub async fn list_session_ids(&self) -> Result<Vec<ClaudeCodeId>, ClaudeCodeError> {
+        let rows = sqlx::query("SELECT id FROM claudecode_sessions ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| db_err("list session ids", e))?;
+
+        rows.iter()
+            .map(|row| {
+                let id_str: String = row.get("id");
+                Uuid::parse_str(&id_str).map_err(|e| parse_err("session ID", e))
+            })
+            .collect()
+    }
+
     /// Delete a session (does not delete the arbor tree)
     pub async fn session_delete(&self, session_id: &ClaudeCodeId) -> Result<(), ClaudeCodeError> {
         let result = sqlx::query("DELETE FROM claudecode_sessions WHERE id = ?")

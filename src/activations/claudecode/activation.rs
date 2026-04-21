@@ -148,6 +148,438 @@ async fn create_event_node(
         .map_err(|e| e.to_string())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared chat stream body (IR-18)
+//
+// The `chat_stream_for_config` helper owns the full per-turn Claude
+// interaction: user-message persistence, arbor event-node chain, launching
+// the Claude CLI, relaying the stream, storing the assistant response, and
+// advancing the session head.
+//
+// Flat `ClaudeCode::chat(name, ...)` resolves by name and delegates here.
+// The new per-session `SessionActivation::chat(prompt, ...)` (IR-18) takes
+// its pre-resolved `ClaudeCodeConfig` and delegates here as well. This keeps
+// the two entry points behaviorally identical without copy-paste.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Run a Claude chat turn against an already-resolved session config, streaming
+/// `ChatEvent`s to the caller.
+///
+/// Callers resolve the session by whatever key makes sense (name for flat
+/// `chat`, session_id for the typed `session` child-gate) and hand a fully
+/// materialized `ClaudeCodeConfig` in; this helper owns the rest of the turn.
+fn chat_stream_for_config(
+    storage: Arc<ClaudeCodeStorage>,
+    executor: ClaudeCodeExecutor,
+    config: ClaudeCodeConfig,
+    prompt: String,
+    ephemeral: Option<bool>,
+    allowed_tools: Option<Vec<String>>,
+) -> impl Stream<Item = ChatEvent> + Send + 'static {
+    stream! {
+        let is_ephemeral = ephemeral.unwrap_or(false);
+        let session_id = config.id;
+
+        // 2. Store user message in our database (ephemeral if requested)
+        let user_msg = if is_ephemeral {
+            match storage.message_create_ephemeral(
+                &session_id,
+                MessageRole::User,
+                prompt.clone(),
+                None, None, None, None,
+            ).await {
+                Ok(m) => m,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        } else {
+            match storage.message_create(
+                &session_id,
+                MessageRole::User,
+                prompt.clone(),
+                None, None, None, None,
+            ).await {
+                Ok(m) => m,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        };
+
+        // 3. Create user message node in Arbor (ephemeral if requested)
+        let user_handle = ClaudeCodeStorage::message_to_handle(&user_msg, "user");
+        let user_node_id = if is_ephemeral {
+            match storage.arbor().node_create_external_ephemeral(
+                &config.head.tree_id,
+                Some(config.head.node_id),
+                user_handle,
+                None,
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        } else {
+            match storage.arbor().node_create_external(
+                &config.head.tree_id,
+                Some(config.head.node_id),
+                user_handle,
+                None,
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        };
+
+        let user_position = Position::new(config.head.tree_id, user_node_id);
+
+        // Track current parent for event node chain
+        let mut current_parent = user_node_id;
+
+        let user_event = NodeEvent::UserMessage { content: prompt.clone() };
+        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &user_event).await {
+            current_parent = node_id;
+        }
+
+        let start_event = NodeEvent::AssistantStart;
+        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &start_event).await {
+            current_parent = node_id;
+        }
+
+        // 4. Emit Start
+        yield ChatEvent::Start {
+            id: session_id,
+            user_position,
+        };
+
+        // 5. Build launch config
+        let launch_config = LaunchConfig {
+            query: prompt,
+            session_id: config.claude_session_id.clone(),
+            fork_session: false,
+            model: config.model,
+            working_dir: config.working_dir.clone(),
+            system_prompt: config.system_prompt.clone(),
+            mcp_config: config.mcp_config.clone(),
+            loopback_enabled: config.loopback_enabled,
+            loopback_session_id: if config.loopback_enabled {
+                config.loopback_session_id.clone()
+            } else {
+                None
+            },
+            allowed_tools: allowed_tools.unwrap_or_default(),
+            ..Default::default()
+        };
+
+        // 6. Launch Claude and stream events
+        let prev_claude_session_id = config.claude_session_id.clone();
+        let mut response_content = String::new();
+        let mut claude_session_id = config.claude_session_id.clone();
+        let mut cost_usd = None;
+        let mut num_turns = None;
+
+        let mut raw_stream = executor.launch(launch_config).await;
+
+        let mut current_tool_id: Option<String> = None;
+        let mut current_tool_name: Option<String> = None;
+        let mut current_tool_input = String::new();
+
+        while let Some(event) = raw_stream.next().await {
+            match event {
+                RawClaudeEvent::System { session_id: sid, .. } => {
+                    if let Some(id) = sid {
+                        claude_session_id = Some(id);
+                    }
+                }
+                RawClaudeEvent::StreamEvent { event: inner, session_id: sid } => {
+                    if let Some(id) = sid {
+                        claude_session_id = Some(id);
+                    }
+                    match inner {
+                        StreamEventInner::ContentBlockDelta { delta, .. } => {
+                            match delta {
+                                StreamDelta::TextDelta { text } => {
+                                    response_content.push_str(&text);
+
+                                    let event = NodeEvent::ContentText { text: text.clone() };
+                                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                        current_parent = node_id;
+                                    }
+
+                                    yield ChatEvent::Content { text };
+                                }
+                                StreamDelta::InputJsonDelta { partial_json } => {
+                                    current_tool_input.push_str(&partial_json);
+                                }
+                            }
+                        }
+                        StreamEventInner::ContentBlockStart { content_block, .. } => {
+                            if let Some(StreamContentBlock::ToolUse { id, name, .. }) = content_block {
+                                current_tool_id = Some(id);
+                                current_tool_name = Some(name);
+                                current_tool_input.clear();
+                            }
+                        }
+                        StreamEventInner::ContentBlockStop { .. } => {
+                            if let (Some(id), Some(name)) = (current_tool_id.take(), current_tool_name.take()) {
+                                let input: Value = serde_json::from_str(&current_tool_input)
+                                    .unwrap_or(Value::Object(serde_json::Map::new()));
+
+                                let event = NodeEvent::ContentToolUse {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                };
+                                if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                    current_parent = node_id;
+                                }
+
+                                yield ChatEvent::ToolUse {
+                                    tool_name: name,
+                                    tool_use_id: id,
+                                    input,
+                                };
+                                current_tool_input.clear();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                RawClaudeEvent::Assistant { message } => {
+                    if let Some(msg) = message {
+                        if let Some(content) = msg.content {
+                            for block in content {
+                                match block {
+                                    RawContentBlock::Text { text } => {
+                                        if response_content.is_empty() {
+                                            response_content.push_str(&text);
+
+                                            let event = NodeEvent::ContentText { text: text.clone() };
+                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                                current_parent = node_id;
+                                            }
+
+                                            yield ChatEvent::Content { text };
+                                        }
+                                    }
+                                    RawContentBlock::ToolUse { id, name, input } => {
+                                        let event = NodeEvent::ContentToolUse {
+                                            id: id.clone(),
+                                            name: name.clone(),
+                                            input: input.clone(),
+                                        };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
+                                        yield ChatEvent::ToolUse {
+                                            tool_name: name,
+                                            tool_use_id: id,
+                                            input,
+                                        };
+                                    }
+                                    RawContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                                        let event = NodeEvent::UserToolResult {
+                                            tool_use_id: tool_use_id.clone(),
+                                            content: content.clone().unwrap_or_default(),
+                                            is_error: is_error.unwrap_or(false),
+                                        };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
+                                        yield ChatEvent::ToolResult {
+                                            tool_use_id,
+                                            output: content.unwrap_or_default(),
+                                            is_error: is_error.unwrap_or(false),
+                                        };
+                                    }
+                                    RawContentBlock::Thinking { thinking, .. } => {
+                                        let event = NodeEvent::ContentThinking { thinking: thinking.clone() };
+                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                                            current_parent = node_id;
+                                        }
+
+                                        yield ChatEvent::Thinking { thinking };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                RawClaudeEvent::Result {
+                    session_id: sid,
+                    cost_usd: cost,
+                    num_turns: turns,
+                    is_error,
+                    error,
+                    ..
+                } => {
+                    if let Some(id) = sid {
+                        claude_session_id = Some(id);
+                    }
+                    cost_usd = cost;
+                    num_turns = turns;
+
+                    if is_error == Some(true) {
+                        if let Some(err_msg) = error {
+                            yield ChatEvent::Err { message: err_msg };
+                            return;
+                        }
+                    }
+                }
+                RawClaudeEvent::Unknown { event_type, data } => {
+                    match storage.unknown_event_store(Some(&session_id), &event_type, &data).await {
+                        Ok(handle) => {
+                            tracing::debug!(event_type = %event_type, handle = %handle, "Unknown Claude event stored");
+                            yield ChatEvent::Passthrough { event_type, handle, data };
+                        }
+                        Err(e) => {
+                            tracing::warn!(event_type = %event_type, error = %e, "Failed to store unknown event");
+                            yield ChatEvent::Passthrough {
+                                event_type,
+                                handle: "storage-failed".to_string(),
+                                data,
+                            };
+                        }
+                    }
+                }
+                RawClaudeEvent::User { .. } => {}
+                RawClaudeEvent::LaunchCommand { command } => {
+                    let event = NodeEvent::LaunchCommand { command };
+                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                        current_parent = node_id;
+                    }
+                }
+                RawClaudeEvent::Stderr { text } => {
+                    tracing::warn!(stderr = %text, "Claude stderr");
+                    let event = NodeEvent::ClaudeStderr { text };
+                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
+                        current_parent = node_id;
+                    }
+                }
+            }
+        }
+
+        // 6b. If we captured a new Claude session UUID, persist it for future --resume
+        if let Some(ref new_id) = claude_session_id {
+            if prev_claude_session_id.as_deref() != Some(new_id.as_str()) {
+                let _ = storage.session_update_claude_id(&session_id, new_id.clone()).await;
+            }
+        }
+
+        // Guard: if stream produced nothing, emit error instead of ghost Complete
+        if response_content.is_empty() && claude_session_id.is_none() {
+            yield ChatEvent::Err {
+                message: "Claude process produced no response. Check substrate logs for details.".to_string(),
+            };
+            return;
+        }
+
+        // 7. Store assistant response (ephemeral if requested)
+        let model_id = format!("claude-code-{}", config.model.as_str());
+        let assistant_msg = if is_ephemeral {
+            match storage.message_create_ephemeral(
+                &session_id,
+                MessageRole::Assistant,
+                response_content,
+                Some(model_id),
+                None,
+                None,
+                cost_usd,
+            ).await {
+                Ok(m) => m,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        } else {
+            match storage.message_create(
+                &session_id,
+                MessageRole::Assistant,
+                response_content,
+                Some(model_id),
+                None,
+                None,
+                cost_usd,
+            ).await {
+                Ok(m) => m,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        };
+
+        // AssistantComplete event node
+        let complete_event = NodeEvent::AssistantComplete { usage: None };
+        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &complete_event).await {
+            current_parent = node_id;
+        }
+
+        // 8. Create assistant node in Arbor (ephemeral if requested)
+        let assistant_handle = ClaudeCodeStorage::message_to_handle(&assistant_msg, "assistant");
+        let assistant_node_id = if is_ephemeral {
+            match storage.arbor().node_create_external_ephemeral(
+                &config.head.tree_id,
+                Some(current_parent),
+                assistant_handle,
+                None,
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        } else {
+            match storage.arbor().node_create_external(
+                &config.head.tree_id,
+                Some(current_parent),
+                assistant_handle,
+                None,
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            }
+        };
+
+        let new_head = Position::new(config.head.tree_id, assistant_node_id);
+
+        // 9. Update session head and Claude session ID (skip for ephemeral)
+        if !is_ephemeral {
+            if let Err(e) = storage.session_update_head(&session_id, assistant_node_id, claude_session_id.clone()).await {
+                yield ChatEvent::Err { message: e.to_string() };
+                return;
+            }
+        }
+
+        // 10. Emit Complete
+        yield ChatEvent::Complete {
+            new_head: if is_ephemeral { config.head } else { new_head },
+            claude_session_id: claude_session_id.unwrap_or_default(),
+            usage: Some(ChatUsage {
+                input_tokens: None,
+                output_tokens: None,
+                cost_usd,
+                num_turns,
+            }),
+        };
+    }
+}
+
 #[plexus_macros::activation(namespace = "claudecode",
 version = "1.0.0",
 description = "Manage Claude Code sessions with Arbor-backed conversation history",
@@ -232,13 +664,10 @@ impl<P: HubContext> ClaudeCode<P> {
         let storage = self.storage.clone();
         let executor = self.executor.clone();
 
-        // Resolve before entering stream to avoid lifetime issues
+        // Resolve by name before entering the stream (matches pre-IR-18 semantics).
         let resolve_result = storage.session_get_by_name(&name).await;
 
         stream! {
-            let is_ephemeral = ephemeral.unwrap_or(false);
-
-            // 1. Resolve and load session
             let config = match resolve_result {
                 Ok(c) => c,
                 Err(e) => {
@@ -247,425 +676,18 @@ impl<P: HubContext> ClaudeCode<P> {
                 }
             };
 
-            let session_id = config.id;
-
-            // 2. Store user message in our database (ephemeral if requested)
-            let user_msg = if is_ephemeral {
-                match storage.message_create_ephemeral(
-                    &session_id,
-                    MessageRole::User,
-                    prompt.clone(),
-                    None, None, None, None,
-                ).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            } else {
-                match storage.message_create(
-                    &session_id,
-                    MessageRole::User,
-                    prompt.clone(),
-                    None, None, None, None,
-                ).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            };
-
-            // 3. Create user message node in Arbor (ephemeral if requested)
-            let user_handle = ClaudeCodeStorage::message_to_handle(&user_msg, "user");
-            let user_node_id = if is_ephemeral {
-                match storage.arbor().node_create_external_ephemeral(
-                    &config.head.tree_id,
-                    Some(config.head.node_id),
-                    user_handle,
-                    None,
-                ).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            } else {
-                match storage.arbor().node_create_external(
-                    &config.head.tree_id,
-                    Some(config.head.node_id),
-                    user_handle,
-                    None,
-                ).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            };
-
-            let user_position = Position::new(config.head.tree_id, user_node_id);
-
-            // Track current parent for event node chain (Milestone 2)
-            let mut current_parent = user_node_id;
-
-            // Create UserMessage event node (Milestone 2)
-            let user_event = NodeEvent::UserMessage { content: prompt.clone() };
-            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &user_event).await {
-                current_parent = node_id;
+            // Hand off to the shared per-turn helper (IR-18).
+            let mut inner = Box::pin(chat_stream_for_config(
+                storage,
+                executor,
+                config,
+                prompt,
+                ephemeral,
+                allowed_tools,
+            ));
+            while let Some(ev) = inner.next().await {
+                yield ev;
             }
-
-            // Create AssistantStart event node (Milestone 2)
-            let start_event = NodeEvent::AssistantStart;
-            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &start_event).await {
-                current_parent = node_id;
-            }
-
-            // 4. Emit Start
-            yield ChatEvent::Start {
-                id: session_id,
-                user_position,
-            };
-
-            // 5. Build launch config
-            let launch_config = LaunchConfig {
-                query: prompt,
-                // Use stored Claude UUID for --resume (None on first call = new session)
-                session_id: config.claude_session_id.clone(),
-                fork_session: false,
-                model: config.model,
-                working_dir: config.working_dir.clone(),
-                system_prompt: config.system_prompt.clone(),
-                mcp_config: config.mcp_config.clone(),
-                loopback_enabled: config.loopback_enabled,
-                // Use loopback_session_id for MCP URL correlation (e.g., orcha-xxx-claude-yyy)
-                loopback_session_id: if config.loopback_enabled {
-                    config.loopback_session_id.clone()
-                } else {
-                    None
-                },
-                allowed_tools: allowed_tools.unwrap_or_default(),
-                ..Default::default()
-            };
-
-            // 6. Launch Claude and stream events
-            let prev_claude_session_id = config.claude_session_id.clone();
-            let mut response_content = String::new();
-            let mut claude_session_id = config.claude_session_id.clone();
-            let mut cost_usd = None;
-            let mut num_turns = None;
-
-            let mut raw_stream = executor.launch(launch_config).await;
-
-            // Track current tool use for streaming tool input
-            let mut current_tool_id: Option<String> = None;
-            let mut current_tool_name: Option<String> = None;
-            let mut current_tool_input = String::new();
-
-            while let Some(event) = raw_stream.next().await {
-                match event {
-                    RawClaudeEvent::System { session_id: sid, .. } => {
-                        if let Some(id) = sid {
-                            claude_session_id = Some(id);
-                        }
-                    }
-                    RawClaudeEvent::StreamEvent { event: inner, session_id: sid } => {
-                        if let Some(id) = sid {
-                            claude_session_id = Some(id);
-                        }
-                        match inner {
-                            StreamEventInner::ContentBlockDelta { delta, .. } => {
-                                match delta {
-                                    StreamDelta::TextDelta { text } => {
-                                        response_content.push_str(&text);
-
-                                        // Create arbor node for text content (Milestone 2)
-                                        let event = NodeEvent::ContentText { text: text.clone() };
-                                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                                            current_parent = node_id;
-                                        }
-
-                                        yield ChatEvent::Content { text };
-                                    }
-                                    StreamDelta::InputJsonDelta { partial_json } => {
-                                        current_tool_input.push_str(&partial_json);
-                                    }
-                                }
-                            }
-                            StreamEventInner::ContentBlockStart { content_block, .. } => {
-                                if let Some(StreamContentBlock::ToolUse { id, name, .. }) = content_block {
-                                    current_tool_id = Some(id);
-                                    current_tool_name = Some(name);
-                                    current_tool_input.clear();
-                                }
-                            }
-                            StreamEventInner::ContentBlockStop { .. } => {
-                                // Emit tool use if we were building one
-                                if let (Some(id), Some(name)) = (current_tool_id.take(), current_tool_name.take()) {
-                                    let input: Value = serde_json::from_str(&current_tool_input)
-                                        .unwrap_or(Value::Object(serde_json::Map::new()));
-
-                                    // Create arbor node for tool use (Milestone 2)
-                                    let event = NodeEvent::ContentToolUse {
-                                        id: id.clone(),
-                                        name: name.clone(),
-                                        input: input.clone(),
-                                    };
-                                    if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                                        current_parent = node_id;
-                                    }
-
-                                    yield ChatEvent::ToolUse {
-                                        tool_name: name,
-                                        tool_use_id: id,
-                                        input,
-                                    };
-                                    current_tool_input.clear();
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    RawClaudeEvent::Assistant { message } => {
-                        // Still handle non-streaming assistant messages (tool results, etc.)
-                        if let Some(msg) = message {
-                            if let Some(content) = msg.content {
-                                for block in content {
-                                    match block {
-                                        RawContentBlock::Text { text } => {
-                                            // Only emit if we haven't already streamed this
-                                            if response_content.is_empty() {
-                                                response_content.push_str(&text);
-
-                                                // Create arbor node for text content (Milestone 2)
-                                                let event = NodeEvent::ContentText { text: text.clone() };
-                                                if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                                                    current_parent = node_id;
-                                                }
-
-                                                yield ChatEvent::Content { text };
-                                            }
-                                        }
-                                        RawContentBlock::ToolUse { id, name, input } => {
-                                            // Create arbor node for tool use (Milestone 2)
-                                            let event = NodeEvent::ContentToolUse {
-                                                id: id.clone(),
-                                                name: name.clone(),
-                                                input: input.clone(),
-                                            };
-                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                                                current_parent = node_id;
-                                            }
-
-                                            yield ChatEvent::ToolUse {
-                                                tool_name: name,
-                                                tool_use_id: id,
-                                                input,
-                                            };
-                                        }
-                                        RawContentBlock::ToolResult { tool_use_id, content, is_error } => {
-                                            // Create arbor node for tool result (Milestone 2)
-                                            let event = NodeEvent::UserToolResult {
-                                                tool_use_id: tool_use_id.clone(),
-                                                content: content.clone().unwrap_or_default(),
-                                                is_error: is_error.unwrap_or(false),
-                                            };
-                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                                                current_parent = node_id;
-                                            }
-
-                                            yield ChatEvent::ToolResult {
-                                                tool_use_id,
-                                                output: content.unwrap_or_default(),
-                                                is_error: is_error.unwrap_or(false),
-                                            };
-                                        }
-                                        RawContentBlock::Thinking { thinking, .. } => {
-                                            // Create arbor node for thinking (Milestone 2)
-                                            let event = NodeEvent::ContentThinking { thinking: thinking.clone() };
-                                            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                                                current_parent = node_id;
-                                            }
-
-                                            yield ChatEvent::Thinking { thinking };
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    RawClaudeEvent::Result {
-                        session_id: sid,
-                        cost_usd: cost,
-                        num_turns: turns,
-                        is_error,
-                        error,
-                        ..
-                    } => {
-                        if let Some(id) = sid {
-                            claude_session_id = Some(id);
-                        }
-                        cost_usd = cost;
-                        num_turns = turns;
-
-                        // Check for error
-                        if is_error == Some(true) {
-                            if let Some(err_msg) = error {
-                                yield ChatEvent::Err { message: err_msg };
-                                return;
-                            }
-                        }
-                    }
-                    RawClaudeEvent::Unknown { event_type, data } => {
-                        // Store unknown event and get handle
-                        match storage.unknown_event_store(Some(&session_id), &event_type, &data).await {
-                            Ok(handle) => {
-                                tracing::debug!(event_type = %event_type, handle = %handle, "Unknown Claude event stored");
-                                yield ChatEvent::Passthrough { event_type, handle, data };
-                            }
-                            Err(e) => {
-                                tracing::warn!(event_type = %event_type, error = %e, "Failed to store unknown event");
-                                // Still forward the event even if storage fails
-                                yield ChatEvent::Passthrough {
-                                    event_type,
-                                    handle: "storage-failed".to_string(),
-                                    data,
-                                };
-                            }
-                        }
-                    }
-                    RawClaudeEvent::User { .. } => {
-                        // User events are echoed back but we don't need to process them
-                    }
-                    RawClaudeEvent::LaunchCommand { command } => {
-                        let event = NodeEvent::LaunchCommand { command };
-                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                            current_parent = node_id;
-                        }
-                    }
-                    RawClaudeEvent::Stderr { text } => {
-                        tracing::warn!(stderr = %text, "Claude stderr");
-                        let event = NodeEvent::ClaudeStderr { text };
-                        if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &event).await {
-                            current_parent = node_id;
-                        }
-                    }
-                }
-            }
-
-            // 6b. If we captured a new Claude session UUID, persist it for future --resume
-            if let Some(ref new_id) = claude_session_id {
-                if prev_claude_session_id.as_deref() != Some(new_id.as_str()) {
-                    let _ = storage.session_update_claude_id(&session_id, new_id.clone()).await;
-                }
-            }
-
-            // Guard: if stream produced nothing, emit error instead of ghost Complete
-            if response_content.is_empty() && claude_session_id.is_none() {
-                yield ChatEvent::Err {
-                    message: "Claude process produced no response. Check substrate logs for details.".to_string(),
-                };
-                return;
-            }
-
-            // 7. Store assistant response (ephemeral if requested)
-            let model_id = format!("claude-code-{}", config.model.as_str());
-            let assistant_msg = if is_ephemeral {
-                match storage.message_create_ephemeral(
-                    &session_id,
-                    MessageRole::Assistant,
-                    response_content,
-                    Some(model_id),
-                    None,
-                    None,
-                    cost_usd,
-                ).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            } else {
-                match storage.message_create(
-                    &session_id,
-                    MessageRole::Assistant,
-                    response_content,
-                    Some(model_id),
-                    None,
-                    None,
-                    cost_usd,
-                ).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            };
-
-            // Create AssistantComplete event node (Milestone 2)
-            let complete_event = NodeEvent::AssistantComplete { usage: None };
-            if let Ok(node_id) = create_event_node(storage.arbor(), &config.head.tree_id, &current_parent, &complete_event).await {
-                current_parent = node_id;
-            }
-
-            // 8. Create assistant node in Arbor (ephemeral if requested)
-            let assistant_handle = ClaudeCodeStorage::message_to_handle(&assistant_msg, "assistant");
-            let assistant_node_id = if is_ephemeral {
-                match storage.arbor().node_create_external_ephemeral(
-                    &config.head.tree_id,
-                    Some(current_parent),
-                    assistant_handle,
-                    None,
-                ).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            } else {
-                match storage.arbor().node_create_external(
-                    &config.head.tree_id,
-                    Some(current_parent),
-                    assistant_handle,
-                    None,
-                ).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        yield ChatEvent::Err { message: e.to_string() };
-                        return;
-                    }
-                }
-            };
-
-            let new_head = Position::new(config.head.tree_id, assistant_node_id);
-
-            // 9. Update session head and Claude session ID (skip for ephemeral)
-            if !is_ephemeral {
-                if let Err(e) = storage.session_update_head(&session_id, assistant_node_id, claude_session_id.clone()).await {
-                    yield ChatEvent::Err { message: e.to_string() };
-                    return;
-                }
-            }
-
-            // 10. Emit Complete
-            // For ephemeral, new_head points to the ephemeral node (not the session's actual head)
-            yield ChatEvent::Complete {
-                new_head: if is_ephemeral { config.head } else { new_head },
-                claude_session_id: claude_session_id.unwrap_or_default(),
-                usage: Some(ChatUsage {
-                    input_tokens: None,
-                    output_tokens: None,
-                    cost_usd,
-                    num_turns,
-                }),
-            };
         }
     }
 
@@ -1130,6 +1152,43 @@ impl<P: HubContext> ClaudeCode<P> {
                 }
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Dynamic child gate — sessions as typed sub-namespaces (IR-18).
+    //
+    // `claudecode.session <id>.chat(…)` now resolves through the
+    // macro-generated `ChildRouter` to a `SessionActivation`. Flat methods
+    // (`chat`, `list`, `delete`, `fork`, etc.) remain unchanged — this gate
+    // is purely additive.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Look up a session by its ID and return a typed per-session namespace.
+    ///
+    /// The returned `SessionActivation` exposes per-session methods
+    /// (`chat`, `get`, `delete`) under the `session` namespace. Resolution
+    /// fails with `None` if the ID doesn't parse as a UUID or no session
+    /// with that ID exists.
+    #[plexus_macros::child(list = "session_ids")]
+    async fn session(&self, id: &str) -> Option<SessionActivation> {
+        let session_id = ClaudeCodeId::parse_str(id).ok()?;
+        match self.storage.session_exists(&session_id).await {
+            Ok(true) => Some(SessionActivation::new(
+                session_id,
+                self.storage.clone(),
+                self.executor.clone(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Enumerate session IDs for `ChildRouter::list_children` tab-completion.
+    ///
+    /// Streams as `String`s because `ChildRouter::list_children` is typed
+    /// that way (routing keys are always stringly-typed on the wire).
+    async fn session_ids(&self) -> impl Stream<Item = String> + Send + '_ {
+        let ids = self.storage.list_session_ids().await.unwrap_or_default();
+        futures::stream::iter(ids.into_iter().map(|id| id.to_string()))
     }
 }
 
@@ -1631,5 +1690,256 @@ impl<P: HubContext> ClaudeCode<P> {
         if let Err(e) = storage.stream_set_status(&stream_id, StreamStatus::Complete, None).await {
             tracing::error!(stream_id = %stream_id, error = %e, "Failed to update stream status");
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SessionActivation — typed per-session namespace (IR-18)
+//
+// Acts as the child activation returned by `ClaudeCode::session(id)`. Methods
+// here delegate to the same storage / executor as the flat `ClaudeCode`
+// methods; the ID is pinned on construction so callers don't pass it into
+// every method.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Per-session activation returned by the `claudecode.session` child gate.
+///
+/// Scoped to a single session by construction, so method arguments carry
+/// only per-turn data (prompt, ephemeral flag, etc.). Cheap to clone — all
+/// state is `Arc`/cheap-copy.
+#[derive(Clone)]
+pub struct SessionActivation {
+    session_id: ClaudeCodeId,
+    storage: Arc<ClaudeCodeStorage>,
+    executor: ClaudeCodeExecutor,
+}
+
+impl SessionActivation {
+    /// Construct a new `SessionActivation` bound to `session_id`.
+    ///
+    /// Constructed by `ClaudeCode::session(id)` after confirming the session
+    /// exists; callers outside the child gate should prefer that path so
+    /// nonexistent IDs surface as `None`.
+    pub fn new(
+        session_id: ClaudeCodeId,
+        storage: Arc<ClaudeCodeStorage>,
+        executor: ClaudeCodeExecutor,
+    ) -> Self {
+        Self { session_id, storage, executor }
+    }
+
+    /// The session this activation is bound to.
+    pub fn session_id(&self) -> ClaudeCodeId {
+        self.session_id
+    }
+}
+
+#[plexus_macros::activation(
+    namespace = "session",
+    version = "1.0.0",
+    description = "Per-session typed namespace for a claudecode session"
+)]
+impl SessionActivation {
+    /// Send a prompt to this session.
+    ///
+    /// Mirrors `ClaudeCode::chat(name, prompt, …)` but pins the session by
+    /// its ID at construction. Delegates to the shared `chat_stream_for_config`
+    /// helper so wire behavior is identical to the flat path.
+    #[plexus_macros::method(streaming,
+    params(
+        prompt = "User message / prompt to send",
+        ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion",
+        allowed_tools = "Optional list of tools to allow (e.g. [\"WebSearch\", \"Read\"])"
+    ))]
+    pub async fn chat(
+        &self,
+        prompt: String,
+        ephemeral: Option<bool>,
+        allowed_tools: Option<Vec<String>>,
+    ) -> impl Stream<Item = ChatEvent> + Send + 'static {
+        let storage = self.storage.clone();
+        let executor = self.executor.clone();
+        let session_id = self.session_id;
+
+        // Resolve by ID up-front so a missing session surfaces an error event
+        // (matching the flat path's error shape).
+        let resolve_result = storage.session_get(&session_id).await;
+
+        stream! {
+            let config = match resolve_result {
+                Ok(c) => c,
+                Err(e) => {
+                    yield ChatEvent::Err { message: e.to_string() };
+                    return;
+                }
+            };
+
+            let mut inner = Box::pin(chat_stream_for_config(
+                storage,
+                executor,
+                config,
+                prompt,
+                ephemeral,
+                allowed_tools,
+            ));
+            while let Some(ev) = inner.next().await {
+                yield ev;
+            }
+        }
+    }
+
+    /// Fetch this session's configuration.
+    #[plexus_macros::method]
+    pub async fn get(&self) -> impl Stream<Item = GetResult> + Send + 'static {
+        let storage = self.storage.clone();
+        let session_id = self.session_id;
+
+        stream! {
+            match storage.session_get(&session_id).await {
+                Ok(config) => yield GetResult::Ok { config },
+                Err(e) => yield GetResult::Err { message: e.to_string() },
+            }
+        }
+    }
+
+    /// Delete this session.
+    ///
+    /// Note: session deletion is a lifecycle operation; after this call
+    /// further method invocations on the same `SessionActivation` will
+    /// return `SessionNotFound`-style errors.
+    #[plexus_macros::method]
+    pub async fn delete(&self) -> impl Stream<Item = DeleteResult> + Send + 'static {
+        let storage = self.storage.clone();
+        let session_id = self.session_id;
+
+        stream! {
+            match storage.session_delete(&session_id).await {
+                Ok(()) => yield DeleteResult::Ok { id: session_id },
+                Err(e) => yield DeleteResult::Err { message: e.to_string() },
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IR-18 tests — schema role tag + ChildRouter lookup
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod ir18_tests {
+    use super::*;
+    use crate::activations::arbor::{ArborConfig, ArborStorage};
+    use crate::activations::claudecode::storage::ClaudeCodeStorageConfig;
+    use crate::activations::claudecode::types::Model;
+    use crate::plexus::{Activation, ChildRouter, MethodRole};
+
+    /// Spin up a ClaudeCode backed by temp-file storage for router tests.
+    async fn setup_claudecode() -> (ClaudeCode<crate::plexus::NoParent>, std::path::PathBuf, std::path::PathBuf) {
+        let temp_dir = std::env::temp_dir();
+        let test_id = uuid::Uuid::new_v4();
+        let arbor_path = temp_dir.join(format!("test_ir18_arbor_{}.db", test_id));
+        let claudecode_path = temp_dir.join(format!("test_ir18_claudecode_{}.db", test_id));
+
+        let arbor_config = ArborConfig {
+            db_path: arbor_path.clone(),
+            scheduled_deletion_window: 604800,
+            archive_window: 2592000,
+            auto_cleanup: false,
+            cleanup_interval: 3600,
+        };
+        let arbor = Arc::new(ArborStorage::new(arbor_config).await.unwrap());
+
+        let storage = Arc::new(
+            ClaudeCodeStorage::new(
+                ClaudeCodeStorageConfig { db_path: claudecode_path.clone() },
+                arbor,
+            )
+            .await
+            .unwrap(),
+        );
+
+        (ClaudeCode::<crate::plexus::NoParent>::new(storage), arbor_path, claudecode_path)
+    }
+
+    // AC #3: `plugin_schema()` on ClaudeCode contains a `session` method tagged
+    // `MethodRole::DynamicChild { list_method: Some("session_ids"), search_method: None }`.
+    #[tokio::test]
+    async fn claudecode_schema_has_session_dynamic_child_with_list() {
+        let (claudecode, _a, _c) = setup_claudecode().await;
+        let schema = claudecode.plugin_schema();
+
+        let session_method = schema
+            .methods
+            .iter()
+            .find(|m| m.name == "session")
+            .expect("ClaudeCode schema must expose a `session` method");
+
+        match &session_method.role {
+            MethodRole::DynamicChild { list_method, search_method } => {
+                assert_eq!(
+                    list_method.as_deref(),
+                    Some("session_ids"),
+                    "`session` must opt into `list = \"session_ids\"`"
+                );
+                assert!(
+                    search_method.is_none(),
+                    "`session` should not declare a search method (got {search_method:?})"
+                );
+            }
+            other => panic!("`session` must be DynamicChild, got {other:?}"),
+        }
+    }
+
+    // AC #4 (Some): a valid session ID resolves through `get_child`.
+    #[tokio::test]
+    async fn claudecode_get_child_valid_session_returns_some() {
+        let (claudecode, _a, _c) = setup_claudecode().await;
+
+        // Create a real session so `session_exists` returns true.
+        let config = claudecode
+            .storage
+            .session_create(
+                "ir18-test".to_string(),
+                std::env::temp_dir().to_string_lossy().to_string(),
+                Model::Sonnet,
+                None,
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("session_create must succeed");
+
+        let child = claudecode.get_child(&config.id.to_string()).await;
+        assert!(
+            child.is_some(),
+            "get_child(<valid session id>) must return Some(SessionActivation)"
+        );
+    }
+
+    // AC #4 (None): a bogus session ID (valid UUID but absent from storage)
+    // returns None — distinguishes "no such session" from "malformed id".
+    #[tokio::test]
+    async fn claudecode_get_child_unknown_session_returns_none() {
+        let (claudecode, _a, _c) = setup_claudecode().await;
+        let bogus = uuid::Uuid::new_v4().to_string();
+        let child = claudecode.get_child(&bogus).await;
+        assert!(
+            child.is_none(),
+            "get_child on an unknown id must yield None"
+        );
+    }
+
+    // AC #4 (None): a malformed ID (not a UUID) returns None without panicking.
+    #[tokio::test]
+    async fn claudecode_get_child_malformed_id_returns_none() {
+        let (claudecode, _a, _c) = setup_claudecode().await;
+        let child = claudecode.get_child("not-a-uuid").await;
+        assert!(
+            child.is_none(),
+            "get_child on a malformed id must yield None (not panic)"
+        );
     }
 }
