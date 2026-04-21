@@ -481,3 +481,156 @@ async fn test_render_resolved_with_mock_resolver() {
     let lines: Vec<&str> = rendered.lines().collect();
     assert!(lines.len() >= 3, "Should have at least 3 lines (root + 2 messages)");
 }
+
+// ============================================================================
+// IR-19: `of` dynamic child gate tests
+//
+// Verifies that Cone surfaces `of` as a role-tagged DynamicChild method with
+// `list_method = Some("cone_ids")`, and that `ChildRouter::get_child` resolves
+// valid UUIDs to `Some(ConeActivation)` and rejects unknown IDs with `None`.
+// ============================================================================
+
+/// AC #3: `plugin_schema()` has `of` method tagged as
+/// `DynamicChild { list_method: Some("cone_ids"), search_method: None }`.
+#[tokio::test]
+async fn of_gate_role_is_dynamic_child_with_cone_ids_list() {
+    use crate::plexus::{Activation, MethodRole};
+
+    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let cone = Cone::<crate::plexus::NoParent>::new(
+        ConeStorageConfig { db_path: _dir.path().join("schema_cones.db") },
+        arbor,
+    ).await.unwrap();
+
+    let schema = cone.plugin_schema();
+    let of = schema
+        .methods
+        .iter()
+        .find(|m| m.name == "of")
+        .expect("cone should expose an `of` method (IR-19 child gate)");
+
+    assert_eq!(
+        of.role,
+        MethodRole::DynamicChild {
+            list_method: Some("cone_ids".into()),
+            search_method: None,
+        },
+        "`of` must be DynamicChild with list_method=Some(\"cone_ids\"), search_method=None; \
+         got {:?}", of.role,
+    );
+}
+
+/// AC #4a: `ChildRouter::get_child(cone, <valid-uuid>)` returns `Some(..)`.
+#[tokio::test]
+async fn get_child_resolves_valid_cone_id() {
+    use crate::plexus::ChildRouter;
+
+    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let cone = Cone::<crate::plexus::NoParent>::new(
+        ConeStorageConfig { db_path: _dir.path().join("resolve_cones.db") },
+        arbor,
+    ).await.unwrap();
+
+    let created = cone
+        .storage()
+        .cone_create(
+            "resolve-test".to_string(),
+            "gpt-4o-mini".to_string(),
+            None,
+            None,
+        )
+        .await
+        .expect("cone_create must succeed");
+
+    let got = cone.get_child(&created.id.to_string()).await;
+    assert!(got.is_some(), "get_child must resolve a valid cone UUID");
+    assert_eq!(got.unwrap().router_namespace(), "cone");
+}
+
+/// AC #4b: `ChildRouter::get_child(cone, <unknown-id>)` returns `None`.
+#[tokio::test]
+async fn get_child_returns_none_for_unknown_id() {
+    use crate::plexus::ChildRouter;
+
+    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let cone = Cone::<crate::plexus::NoParent>::new(
+        ConeStorageConfig { db_path: _dir.path().join("unknown_cones.db") },
+        arbor,
+    ).await.unwrap();
+
+    // No cones created — every ID is unknown.
+    let unknown_uuid = uuid::Uuid::new_v4().to_string();
+    assert!(
+        cone.get_child(&unknown_uuid).await.is_none(),
+        "get_child must return None for unknown cone IDs",
+    );
+    assert!(
+        cone.get_child("definitely-not-a-cone").await.is_none(),
+        "get_child must return None for non-UUID, non-existent names",
+    );
+}
+
+/// AC #6: the `ChildRouter` impl on `Cone` reports `LIST` capability.
+#[tokio::test]
+async fn cone_child_router_capabilities_include_list() {
+    #[allow(deprecated)]
+    use crate::plexus::{ChildCapabilities, ChildRouter};
+
+    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let cone = Cone::<crate::plexus::NoParent>::new(
+        ConeStorageConfig { db_path: _dir.path().join("caps_cones.db") },
+        arbor,
+    ).await.unwrap();
+
+    #[allow(deprecated)]
+    let caps = cone.capabilities();
+    #[allow(deprecated)]
+    let expected = ChildCapabilities::LIST;
+    assert!(
+        caps.contains(expected),
+        "Cone must advertise LIST capability (list = \"cone_ids\" opt-in); got {:?}",
+        caps
+    );
+}
+
+/// Sanity: `cone_ids` streams the ids of currently-known cones (CHILD-4 listing).
+#[tokio::test]
+async fn list_children_streams_known_cone_ids() {
+    use crate::plexus::ChildRouter;
+    use futures::StreamExt;
+
+    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let cone = Cone::<crate::plexus::NoParent>::new(
+        ConeStorageConfig { db_path: _dir.path().join("list_cones.db") },
+        arbor,
+    ).await.unwrap();
+
+    let a = cone
+        .storage()
+        .cone_create("a-list".to_string(), "gpt-4o-mini".to_string(), None, None)
+        .await
+        .unwrap();
+    let b = cone
+        .storage()
+        .cone_create("b-list".to_string(), "gpt-4o-mini".to_string(), None, None)
+        .await
+        .unwrap();
+
+    let listed: Vec<String> = cone
+        .list_children()
+        .await
+        .expect("list_children must be Some when `list = ...` is set")
+        .collect()
+        .await;
+
+    assert!(
+        listed.iter().any(|id| id == &a.id.to_string()),
+        "list_children should contain cone a's UUID; got {:?}",
+        listed
+    );
+    assert!(
+        listed.iter().any(|id| id == &b.id.to_string()),
+        "list_children should contain cone b's UUID; got {:?}",
+        listed
+    );
+}

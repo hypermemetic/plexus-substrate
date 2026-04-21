@@ -1,7 +1,7 @@
 use super::methods::ConeIdentifier;
 use super::storage::{ConeStorage, ConeStorageConfig};
 use super::types::{
-    ChatEvent, ChatUsage, CreateResult, DeleteResult, GetResult,
+    ChatEvent, ChatUsage, ConeId, CreateResult, DeleteResult, GetResult,
     ListResult, MessageRole, RegistryResult, ResolveResult, SetHeadResult,
 };
 use crate::activations::arbor::{Node, NodeId, NodeType};
@@ -617,6 +617,446 @@ impl<P: HubContext> Cone<P> {
         stream! {
             let export = llm_registry.export();
             yield RegistryResult::Registry(export);
+        }
+    }
+
+    /// Look up a specific cone by identifier (name or UUID) and return it as a
+    /// nested typed activation.
+    ///
+    /// Enables the nested-namespace syntax: `cone.of abc123.chat "…"` routes
+    /// through this gate, then dispatches `chat` on the returned
+    /// [`ConeActivation`]. Flat methods on `Cone` remain the primary API;
+    /// this gate is additive (IR-19).
+    ///
+    /// The sibling `cone_ids` method supplies completions for
+    /// `ChildRouter::list_children`.
+    #[plexus_macros::child(list = "cone_ids")]
+    async fn of(&self, id: &str) -> Option<ConeActivation> {
+        // Accept either UUID or (partial) name — mirrors the flat methods'
+        // `ConeIdentifier` resolution so the child gate is as forgiving as
+        // `cone.chat(identifier=..)`.
+        let identifier = match uuid::Uuid::parse_str(id) {
+            Ok(uuid) => ConeIdentifier::ById { id: uuid },
+            Err(_) => ConeIdentifier::ByName { name: id.to_string() },
+        };
+
+        let cone_id = self
+            .storage
+            .resolve_cone_identifier(&identifier)
+            .await
+            .ok()?;
+
+        // `resolve_cone_identifier` accepts any syntactically valid UUID in
+        // the `ById` branch without consulting the DB; probe `cone_get` here
+        // so `get_child("<unknown-uuid>")` returns `None` rather than a
+        // `ConeActivation` bound to a nonexistent cone.
+        self.storage.cone_get(&cone_id).await.ok()?;
+
+        Some(ConeActivation::new(
+            cone_id,
+            self.storage.clone(),
+            self.llm_registry.clone(),
+        ))
+    }
+
+    /// Stream cone identifiers (UUIDs) for `ChildRouter::list_children`.
+    ///
+    /// Used by the `of` child gate's `list = "cone_ids"` opt-in to advertise
+    /// the set of addressable cones for tab-completion in generated clients.
+    async fn cone_ids(&self) -> impl Stream<Item = String> + Send + '_ {
+        let storage = self.storage.clone();
+        stream! {
+            match storage.cone_list().await {
+                Ok(cones) => {
+                    for cone in cones {
+                        yield cone.id.to_string();
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("cone_ids: failed to list cones: {}", e);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// ConeActivation — per-cone typed namespace (IR-19)
+// ============================================================================
+
+/// Per-cone typed activation exposed through `Cone::of(id)`.
+///
+/// Wraps a single cone's identity + shared storage/LLM-registry handles so
+/// nested calls like `cone.of {id}.chat(...)` can dispatch without re-passing
+/// the cone identifier. The flat methods on [`Cone`] remain the source of
+/// truth for creation/listing/deletion-at-root; `ConeActivation` is an
+/// additive, per-instance view (IR-19).
+#[derive(Clone)]
+pub struct ConeActivation {
+    cone_id: ConeId,
+    storage: Arc<ConeStorage>,
+    llm_registry: Arc<ModelRegistry>,
+}
+
+impl ConeActivation {
+    /// Construct a new per-cone activation.
+    ///
+    /// Callers should only produce this through [`Cone::of`], which performs
+    /// the identifier-to-`ConeId` resolution.
+    pub fn new(
+        cone_id: ConeId,
+        storage: Arc<ConeStorage>,
+        llm_registry: Arc<ModelRegistry>,
+    ) -> Self {
+        Self {
+            cone_id,
+            storage,
+            llm_registry,
+        }
+    }
+
+    /// The underlying cone identifier this activation is bound to.
+    pub fn cone_id(&self) -> ConeId {
+        self.cone_id
+    }
+}
+
+#[plexus_macros::activation(namespace = "cone", version = "1.0.0",
+    description = "Typed view of a single cone — IR-19 dynamic child gate")]
+impl ConeActivation {
+    /// Return this cone's configuration.
+    #[plexus_macros::method]
+    async fn get(&self) -> impl Stream<Item = GetResult> + Send + 'static {
+        let storage = self.storage.clone();
+        let cone_id = self.cone_id;
+
+        stream! {
+            match storage.cone_get(&cone_id).await {
+                Ok(cone) => {
+                    yield GetResult::Data { cone };
+                }
+                Err(e) => {
+                    yield GetResult::Error { message: e.to_string() };
+                }
+            }
+        }
+    }
+
+    /// Delete this cone. The associated conversation tree is preserved.
+    #[plexus_macros::method]
+    async fn delete(&self) -> impl Stream<Item = DeleteResult> + Send + 'static {
+        let storage = self.storage.clone();
+        let cone_id = self.cone_id;
+
+        stream! {
+            match storage.cone_delete(&cone_id).await {
+                Ok(()) => {
+                    yield DeleteResult::Deleted { cone_id };
+                }
+                Err(e) => {
+                    yield DeleteResult::Error { message: e.to_string() };
+                }
+            }
+        }
+    }
+
+    /// Move this cone's canonical head to a different node in its tree.
+    #[plexus_macros::method(params(
+        node_id = "UUID of the target node to set as the new head"
+    ))]
+    async fn set_head(
+        &self,
+        node_id: NodeId,
+    ) -> impl Stream<Item = SetHeadResult> + Send + 'static {
+        let storage = self.storage.clone();
+        let cone_id = self.cone_id;
+
+        stream! {
+            let old_head = match storage.cone_get(&cone_id).await {
+                Ok(cone) => cone.head,
+                Err(e) => {
+                    yield SetHeadResult::Error { message: e.to_string() };
+                    return;
+                }
+            };
+
+            let new_head = old_head.advance(node_id);
+
+            match storage.cone_update_head(&cone_id, node_id).await {
+                Ok(()) => {
+                    yield SetHeadResult::Updated {
+                        cone_id,
+                        old_head,
+                        new_head,
+                    };
+                }
+                Err(e) => {
+                    yield SetHeadResult::Error { message: e.to_string() };
+                }
+            }
+        }
+    }
+
+    /// Chat with this cone — appends prompt to context, calls LLM, advances head.
+    ///
+    /// Per-cone mirror of `Cone::chat(identifier, prompt, ephemeral)` without
+    /// the identifier parameter (the cone is fixed by the child gate).
+    #[plexus_macros::method(streaming,
+    params(
+        prompt = "User message / prompt to send to the LLM",
+        ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion"
+    ))]
+    async fn chat(
+        &self,
+        prompt: String,
+        ephemeral: Option<bool>,
+    ) -> impl Stream<Item = ChatEvent> + Send + 'static {
+        let storage = self.storage.clone();
+        let llm_registry = self.llm_registry.clone();
+        let cone_id = self.cone_id;
+
+        stream! {
+            let is_ephemeral = ephemeral.unwrap_or(false);
+
+            // 1. Load cone config
+            let cone = match storage.cone_get(&cone_id).await {
+                Ok(a) => a,
+                Err(e) => {
+                    yield ChatEvent::Error { message: format!("Failed to get cone: {}", e.to_string()) };
+                    return;
+                }
+            };
+
+            // 2. Build context from arbor path (handles only)
+            let context_nodes = match storage.arbor().context_get_path(&cone.head.tree_id, &cone.head.node_id).await {
+                Ok(nodes) => nodes,
+                Err(e) => {
+                    yield ChatEvent::Error { message: format!("Failed to get context path: {}", e) };
+                    return;
+                }
+            };
+
+            // Resolve handles to messages
+            let messages = match resolve_context_to_messages(&storage, &context_nodes, &cone.system_prompt).await {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    yield ChatEvent::Error { message: format!("Failed to resolve context: {}", e) };
+                    return;
+                }
+            };
+
+            // 3. Store user message in cone database (ephemeral if requested)
+            let user_message = if is_ephemeral {
+                match storage.message_create_ephemeral(
+                    &cone_id,
+                    MessageRole::User,
+                    prompt.clone(),
+                    None,
+                    None,
+                    None,
+                ).await {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to store user message: {}", e.to_string()) };
+                        return;
+                    }
+                }
+            } else {
+                match storage.message_create(
+                    &cone_id,
+                    MessageRole::User,
+                    prompt.clone(),
+                    None,
+                    None,
+                    None,
+                ).await {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to store user message: {}", e.to_string()) };
+                        return;
+                    }
+                }
+            };
+
+            // Create external node with handle pointing to user message
+            let user_handle = ConeStorage::message_to_handle(&user_message, "user");
+            let user_node_id = if is_ephemeral {
+                match storage.arbor().node_create_external_ephemeral(
+                    &cone.head.tree_id,
+                    Some(cone.head.node_id),
+                    user_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to create user node: {}", e) };
+                        return;
+                    }
+                }
+            } else {
+                match storage.arbor().node_create_external(
+                    &cone.head.tree_id,
+                    Some(cone.head.node_id),
+                    user_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to create user node: {}", e) };
+                        return;
+                    }
+                }
+            };
+
+            let user_position = cone.head.advance(user_node_id);
+
+            yield ChatEvent::Start {
+                cone_id,
+                user_position,
+            };
+
+            // 4. Build LLM request with resolved messages + new user prompt
+            let mut llm_messages = messages;
+            llm_messages.push(Message::user(&prompt));
+
+            let request_builder = match llm_registry.from_id(&cone.model_id) {
+                Ok(rb) => rb,
+                Err(e) => {
+                    yield ChatEvent::Error { message: format!("Failed to create request builder: {}", e) };
+                    return;
+                }
+            };
+
+            let mut builder = request_builder;
+            if let Some(ref sys) = cone.system_prompt {
+                builder = builder.system(sys);
+            }
+            builder = builder.messages(llm_messages);
+
+            let mut stream_result = match builder.stream().await {
+                Ok(s) => s,
+                Err(e) => {
+                    yield ChatEvent::Error { message: format!("Failed to start LLM stream: {}", e) };
+                    return;
+                }
+            };
+
+            let mut full_response = String::new();
+            let mut input_tokens: Option<i64> = None;
+            let mut output_tokens: Option<i64> = None;
+
+            use futures::StreamExt;
+            while let Some(event) = stream_result.next().await {
+                match event {
+                    Ok(cllient::streaming::StreamEvent::Content(text)) => {
+                        full_response.push_str(&text);
+                        yield ChatEvent::Content {
+                            cone_id,
+                            content: text,
+                        };
+                    }
+                    Ok(cllient::streaming::StreamEvent::Usage { input_tokens: inp, output_tokens: out, .. }) => {
+                        input_tokens = inp.map(|t| t as i64);
+                        output_tokens = out.map(|t| t as i64);
+                    }
+                    Ok(cllient::streaming::StreamEvent::Error(e)) => {
+                        yield ChatEvent::Error { message: format!("LLM error: {}", e) };
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Stream error: {}", e) };
+                        return;
+                    }
+                }
+            }
+
+            // 5. Store assistant response
+            let assistant_message = if is_ephemeral {
+                match storage.message_create_ephemeral(
+                    &cone_id,
+                    MessageRole::Assistant,
+                    full_response,
+                    Some(cone.model_id.clone()),
+                    input_tokens,
+                    output_tokens,
+                ).await {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to store assistant message: {}", e.to_string()) };
+                        return;
+                    }
+                }
+            } else {
+                match storage.message_create(
+                    &cone_id,
+                    MessageRole::Assistant,
+                    full_response,
+                    Some(cone.model_id.clone()),
+                    input_tokens,
+                    output_tokens,
+                ).await {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to store assistant message: {}", e.to_string()) };
+                        return;
+                    }
+                }
+            };
+
+            let assistant_handle = ConeStorage::message_to_handle(&assistant_message, &cone.name);
+            let response_node_id = if is_ephemeral {
+                match storage.arbor().node_create_external_ephemeral(
+                    &cone.head.tree_id,
+                    Some(user_node_id),
+                    assistant_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to create response node: {}", e) };
+                        return;
+                    }
+                }
+            } else {
+                match storage.arbor().node_create_external(
+                    &cone.head.tree_id,
+                    Some(user_node_id),
+                    assistant_handle,
+                    None,
+                ).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        yield ChatEvent::Error { message: format!("Failed to create response node: {}", e) };
+                        return;
+                    }
+                }
+            };
+
+            let new_head = user_position.advance(response_node_id);
+
+            if !is_ephemeral {
+                if let Err(e) = storage.cone_update_head(&cone_id, response_node_id).await {
+                    yield ChatEvent::Error { message: format!("Failed to update head: {}", e.to_string()) };
+                    return;
+                }
+            }
+
+            let usage_info = if input_tokens.is_some() || output_tokens.is_some() {
+                Some(ChatUsage {
+                    input_tokens: input_tokens.map(|t| t as u64),
+                    output_tokens: output_tokens.map(|t| t as u64),
+                    total_tokens: input_tokens.and_then(|i| output_tokens.map(|o| (i + o) as u64)),
+                })
+            } else {
+                None
+            };
+
+            yield ChatEvent::Complete {
+                cone_id,
+                new_head: if is_ephemeral { cone.head } else { new_head },
+                usage: usage_info,
+            };
         }
     }
 }
