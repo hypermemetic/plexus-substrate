@@ -1,7 +1,7 @@
 ---
 id: HF-AUDIT-4
 title: "plexus-macros 0.5.2: skip child-role methods in .schema strip-suffix shortcut (narrow fix for HF-AUDIT-3)"
-status: Ready
+status: Complete
 type: implementation
 blocked_by: []
 unlocks: []

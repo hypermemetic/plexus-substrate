@@ -1,7 +1,7 @@
 ---
 id: HF-AUDIT-3
 title: "hyperforge child-activation schema routing: `synapse lforge hyperforge build` errors 'No schema in response'"
-status: Pending
+status: Complete
 type: analysis
 blocked_by: []
 unlocks: []
@@ -72,3 +72,19 @@ Once root cause is identified, either:
 ## Completion
 
 Ticket promoted when the user confirms scope. Implementer reports root cause + fix. Status flipped to Complete once `synapse lforge hyperforge build dirty ...` works end-to-end.
+
+## Resolution (2026-04-20)
+
+Fixed by **HF-AUDIT-4** (plexus-macros 0.5.2, commit `7eb06df` — see `plans/HF-AUDIT/HF-AUDIT-4.md`).
+
+Root cause was **hypothesis 1** variant: the `#[plexus_macros::activation]` macro-generated `Activation::call` `_` arm contained a `.schema` strip-suffix shortcut that returned `SchemaResult::Method` for ANY method name matching the prefix, including `#[plexus_macros::child]` accessors (which since CHILD-8 / IR-10 appear in `plugin_schema.methods` with role `StaticChild` / `DynamicChild { .. }`). That short-circuited `route_to_child`, so the caller got the parent's child-accessor MethodSchema (content_type `*.method_schema`) instead of the child's PluginSchema (content_type `*.schema`) — and synapse's content-type filter rejected it as "No schema in response".
+
+Narrow fix (HF-AUDIT-4): exclude child-role entries from the shortcut's `find` predicate. Regular `#[method]`s keep hitting the shortcut; child accessors fall through to `route_to_child`, which dispatches `"<child>.schema"` into the child activation and returns `SchemaResult::Plugin(<child_plugin_schema>)` as expected.
+
+Verified end-to-end with hyperforge 4.1.3 (rebuilt against published plexus-macros 0.5.2 from crates.io):
+
+- `synapse --port 44104 --no-cache lforge hyperforge build` renders BuildHub's schema tree (analyze, binstall_init, brew_formula, etc.).
+- `synapse --port 44104 lforge hyperforge build dirty --path ... --all_git true` streams dirty-repo events correctly.
+- `synapse --port 44104 --no-cache lforge hyperforge workspace` / `repo` drill-downs also render their schema trees.
+
+Regression test pinned in `plexus-macros/tests/hf_audit_4_child_schema_drill_down_tests.rs`.
