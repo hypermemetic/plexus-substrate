@@ -572,11 +572,17 @@ async fn get_child_returns_none_for_unknown_id() {
     );
 }
 
-/// AC #6: the `ChildRouter` impl on `Cone` reports `LIST` capability.
+/// AC #6: Cone advertises the LIST capability on its dynamic child gate.
+///
+/// The IR-4 replacement for `ChildRouter::capabilities()` + `ChildCapabilities::LIST`
+/// is the `MethodRole::DynamicChild { list_method, .. }` tag on the gate
+/// method's `MethodSchema`. A present `list_method` is the authoritative
+/// post-IR-4 signal that listing is supported — it's the shape Synapse and
+/// other introspection clients read to know whether `list_children()` will
+/// return `Some(stream)`.
 #[tokio::test]
 async fn cone_child_router_capabilities_include_list() {
-    #[allow(deprecated)]
-    use crate::plexus::{ChildCapabilities, ChildRouter};
+    use crate::plexus::{Activation, MethodRole};
 
     let (_cone_storage, arbor, dir) = create_test_storage().await;
     let cone = Cone::<crate::plexus::NoParent>::new(
@@ -584,14 +590,25 @@ async fn cone_child_router_capabilities_include_list() {
         arbor,
     ).await.unwrap();
 
-    #[allow(deprecated)]
-    let caps = cone.capabilities();
-    #[allow(deprecated)]
-    let expected = ChildCapabilities::LIST;
-    assert!(
-        caps.contains(expected),
-        "Cone must advertise LIST capability (list = \"cone_ids\" opt-in); got {caps:?}"
-    );
+    let schema = cone.plugin_schema();
+    let of = schema
+        .methods
+        .iter()
+        .find(|m| m.name == "of")
+        .expect("cone should expose an `of` child gate method");
+
+    match &of.role {
+        MethodRole::DynamicChild { list_method, .. } => {
+            assert!(
+                list_method.is_some(),
+                "Cone must advertise LIST capability via MethodRole::DynamicChild \
+                 `list_method` (list = \"cone_ids\" opt-in); got list_method=None"
+            );
+        }
+        other => panic!(
+            "`of` must be DynamicChild with a list_method set; got role={other:?}"
+        ),
+    }
 }
 
 /// Sanity: `cone_ids` streams the ids of currently-known cones (CHILD-4 listing).

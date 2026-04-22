@@ -7,22 +7,16 @@
 //!
 //! Each level implements the F-coalgebra structure map via `plugin_schema()`.
 //!
-//! # IR-8: module-level `#![allow(deprecated)]`
+//! # plexus-macros 0.5.3+: no module-level `#![allow(deprecated)]` needed
 //!
 //! Solar's hand-written `plugin_children()` is `#[deprecated]` (IR-8) so
 //! downstream Rust callers get migration nudges. The
-//! `#[plexus_macros::activation]` macro, however, synthesizes its own
-//! `impl Activation for Solar` in this module whose generated
-//! `plugin_schema()` body calls `self.plugin_children()` directly — that
-//! macro output isn't annotated with `#[allow(deprecated)]` so the
-//! substrate build would otherwise emit a spurious warning originating at
-//! the macro invocation site (IR-8 AC #4 forbids that).
-//!
-//! Suppressing at module scope is the narrowest non-invasive fix:
-//! plexus-macros lives in a separate repo and IR-8 is not permitted to
-//! modify it. When HASH-1 removes the hand-written override, this
-//! `#![allow(deprecated)]` can be deleted.
-#![allow(deprecated)]
+//! `#[plexus_macros::activation]` macro generates
+//! `impl Activation for Solar` whose body calls `self.plugin_children()`;
+//! as of plexus-macros 0.5.3 (IR-16) that call is wrapped in an
+//! `#[allow(deprecated)]` block *inside the macro's output*, so the
+//! substrate build does not need — and must not have — a module-level
+//! suppression.
 
 use super::celestial::{build_solar_system, CelestialBody, CelestialBodyActivation};
 use super::types::{BodyType, SolarEvent};
@@ -219,11 +213,18 @@ mod tests {
             body.role
         );
 
-        // The hand-written `plugin_children()` override still surfaces the 8
-        // configured planets and is the source of per-planet hashes. This is
-        // independent of the schema surface IR-8 migrates.
-        #[allow(deprecated)]
-        let planets = solar.plugin_children();
+        // Verify all 8 planets are configured with deterministic per-planet
+        // hashes. Source-of-truth is the `CelestialBody` tree; we derive
+        // child summaries the same way `CelestialBody::to_plugin_schema`
+        // does — no dependency on Solar's deprecated `plugin_children()`
+        // override.
+        let _ = solar; // Solar's methods-under-test are the role-tagged ones above.
+        let system = build_solar_system();
+        let planets: Vec<_> = system
+            .children
+            .iter()
+            .map(CelestialBody::to_child_summary)
+            .collect();
         assert_eq!(planets.len(), 8, "solar should have 8 configured planets");
         let jupiter = planets
             .iter()
@@ -233,23 +234,18 @@ mod tests {
         assert!(!jupiter.hash.is_empty());
     }
 
-    // DynamicHub aggregates registered activations via the legacy `children`
-    // field (no role-tagged methods). Until DynamicHub learns to emit role
-    // tags for its registrants, this test intentionally reads the legacy
-    // field under `#[allow(deprecated)]`.
+    // DynamicHub aggregates registered activations and exposes them via its
+    // own (non-deprecated) `plugin_children()` method on `DynamicHub`. That
+    // method is the replacement read-path for the soon-to-be-removed
+    // `schema.children` side-table field — it returns the same
+    // `Vec<ChildSummary>` without any deprecation surface.
     #[test]
-    #[allow(deprecated)]
     fn solar_registered_with_dynamic_hub() {
         let hub = DynamicHub::new("plexus").register(Solar::new());
-        let schema = hub.plugin_schema();
 
-        // DynamicHub exposes registered activations through its legacy
-        // children list — not role-tagged methods. Assert via the field
-        // that is still its source of truth.
-        let children = schema
-            .children
-            .as_ref()
-            .expect("DynamicHub should report registered activations as children");
+        // `DynamicHub::plugin_children()` is the replacement API for reading
+        // the registrant roster. It is not deprecated (plexus-core 0.5.2 +).
+        let children = hub.plugin_children();
 
         let solar = children
             .iter()

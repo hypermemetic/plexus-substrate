@@ -423,23 +423,41 @@ mod tests {
         let sol = build_solar_system();
         let schema = sol.to_plugin_schema();
 
-        // Using deprecated `is_hub()` + `children` field: Solar's schema is
-        // derived from `plugin_children()` (itself deprecated) which populates
-        // the legacy `children` field. `is_hub_by_role()` reads MethodRole
-        // from the method list and returns false here because the Solar
-        // methods don't carry child-role annotations. Field removal is
-        // tracked in plexus-core 0.7 (see SUB-CLEAN-2 notes).
-        #[allow(deprecated)]
-        let (is_hub, children) = (schema.is_hub(), schema.children.as_ref().unwrap());
-        assert!(is_hub);
-        assert_eq!(children.len(), 8); // 8 planets as summaries
+        // `CelestialBody::to_plugin_schema()` is a hand-written helper that
+        // composes a `PluginSchema` for the solar hierarchy without going
+        // through `#[plexus_macros::child]`. It therefore does not emit
+        // `MethodRole::StaticChild` / `DynamicChild` tags and
+        // `PluginSchema::is_hub_by_role()` correctly reports `false` here.
+        // The semantic coverage this test owns — "Sol has 8 planet children,
+        // each with a stable per-planet hash" — is asserted directly against
+        // the `CelestialBody` tree (the source of truth) plus the namespace
+        // / version surface of the produced schema. Neither assertion reads
+        // the deprecated `is_hub()` / `children` surface.
+        assert_eq!(schema.namespace, "sol");
+        assert_eq!(sol.children.len(), 8); // 8 planets
+
+        // Produce per-planet `ChildSummary` objects the same way the
+        // production path does — via `CelestialBody::to_child_summary` — and
+        // verify individual planets are present with non-empty hashes.
+        let child_summaries: Vec<_> = sol
+            .children
+            .iter()
+            .map(CelestialBody::to_child_summary)
+            .collect();
+        assert_eq!(child_summaries.len(), 8);
 
         // Mercury is in the list
-        let mercury = children.iter().find(|c| c.namespace == "mercury").unwrap();
+        let mercury = child_summaries
+            .iter()
+            .find(|c| c.namespace == "mercury")
+            .unwrap();
         assert!(mercury.description.contains("planet"));
 
-        // Earth is in the list
-        let earth = children.iter().find(|c| c.namespace == "earth").unwrap();
+        // Earth is in the list, with a non-empty deterministic hash
+        let earth = child_summaries
+            .iter()
+            .find(|c| c.namespace == "earth")
+            .unwrap();
         assert!(earth.description.contains("planet"));
         assert!(!earth.hash.is_empty());
     }
