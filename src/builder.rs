@@ -151,12 +151,12 @@ pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
             .register(mustache)
             .register(changelog.clone())
             .register((*loopback).clone())
-            .register_hub(orcha)
+            .register(orcha)
             // .register(jsexec)  // temporarily disabled
             .register(registry)
             .register(lattice)
             .register(Interactive::new())  // Bidirectional demo activation
-            .register_hub(Solar::new())
+            .register(Solar::new())
     });
 
     // Run changelog startup check

@@ -2,7 +2,6 @@ use super::storage::{LatticeStorage, LatticeStorageConfig};
 use super::types::*;
 use async_stream::stream;
 use futures::Stream;
-use plexus_macros::activation;
 use serde_json::Value;
 use std::sync::Arc;
 

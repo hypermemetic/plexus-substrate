@@ -2,7 +2,6 @@ use super::storage::{LoopbackStorage, LoopbackStorageConfig};
 use super::types::*;
 use async_stream::stream;
 use futures::Stream;
-use plexus_macros::activation;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;

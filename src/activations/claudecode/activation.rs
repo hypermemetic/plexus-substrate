@@ -8,7 +8,6 @@ use crate::activations::arbor::{NodeId, TreeId};
 use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
-use plexus_macros::activation;
 use serde_json::Value;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
@@ -1729,6 +1728,13 @@ impl SessionActivation {
     }
 
     /// The session this activation is bound to.
+    ///
+    /// Public accessor for HandleEnum integration — see IR-18. Kept public
+    /// for parity with the cone precedent (`ConeActivation::cone_id`), which
+    /// is reachable via `pub use` re-export while `SessionActivation` is not;
+    /// hence the explicit `allow(dead_code)` here rather than relying on
+    /// re-export reachability.
+    #[allow(dead_code)]
     pub fn session_id(&self) -> ClaudeCodeId {
         self.session_id
     }

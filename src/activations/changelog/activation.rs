@@ -2,7 +2,6 @@ use super::storage::{ChangelogStorage, ChangelogStorageConfig};
 use super::types::{ChangelogEntry, ChangelogEvent, QueueEntry};
 use async_stream::stream;
 use futures::Stream;
-use plexus_macros::activation;
 use std::sync::Arc;
 
 /// Changelog activation - tracks Plexus RPC server hash changes and enforces documentation

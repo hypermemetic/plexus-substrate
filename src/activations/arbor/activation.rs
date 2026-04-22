@@ -3,7 +3,6 @@ use super::types::{ArborEvent, Handle, NodeId, TreeId, TreeSkeleton};
 use crate::plexus::{HubContext, NoParent, PlexusStreamItem};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
-use plexus_macros::activation;
 use serde_json::Value;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};

@@ -10,7 +10,6 @@ use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
 use cllient::{Message, ModelRegistry};
 use futures::Stream;
-use plexus_macros::activation;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 

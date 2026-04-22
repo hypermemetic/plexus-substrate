@@ -11,7 +11,6 @@ use crate::plexus::{HubContext, NoParent};
 use async_stream::stream;
 use futures::Stream;
 use futures::StreamExt;
-use plexus_macros::activation;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;

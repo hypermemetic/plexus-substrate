@@ -1,7 +1,6 @@
 use super::executor::BashExecutor;
 use super::types::BashEvent;
 use futures::Stream;
-use plexus_macros::activation;
 
 /// Bash activation - execute shell commands and stream output
 #[derive(Clone)]
