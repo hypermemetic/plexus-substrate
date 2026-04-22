@@ -1,6 +1,6 @@
 [package]
 name = "plexus-substrate"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Reference Plexus RPC server with conversation trees and LLM orchestration"
 license = "AGPL-3.0-only"
@@ -64,7 +64,6 @@ cllient = "0.2.1"
 plexus-macros = "0.5"
 plexus-core = "0.5"
 plexus-transport = { version = "0.2", features = ["mcp-gateway"] }
-hyperforge = "4.0.0"
 # plexus-jsexec = "0.1.0"  # temporarily disabled - needs API updates
 registry = { package = "plexus-registry", version = "0.1.0" }
 
