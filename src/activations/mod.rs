@@ -1,7 +1,10 @@
 // Common storage utilities for activations
 pub mod storage;
 
-// Chaos provides fault injection and observability for anti-fragility testing
+// Chaos provides fault injection and observability for anti-fragility testing.
+// Gated behind the `chaos` feature — opt-in because it pulls in libc + unsafe
+// signal primitives. Default builds omit this module entirely.
+#[cfg(feature = "chaos")]
 pub mod chaos;
 
 // Health is the reference implementation for the new architecture (manual impl)

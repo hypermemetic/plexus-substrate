@@ -1,6 +1,6 @@
 [package]
 name = "plexus-substrate"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Reference Plexus RPC server with conversation trees and LLM orchestration"
 license = "AGPL-3.0-only"
@@ -70,12 +70,16 @@ registry = { package = "plexus-registry", version = "0.1.0" }
 # Mustache templating
 mustache = "0.9"
 
-# POSIX signal primitives (used by chaos activation)
-libc = "0.2"
+# POSIX signal primitives (used by chaos activation, gated by the `chaos` feature)
+libc = { version = "0.2", optional = true }
 
 [features]
 default = ["mcp-gateway"]
 mcp-gateway = ["plexus-transport/mcp-gateway"]
+# chaos: opt-in fault-injection activation. Pulls in libc + two narrow
+# unsafe blocks (libc::kill SIGKILL/SIGTERM). Off by default so the
+# baseline library has zero unsafe compiled in.
+chaos = ["dep:libc"]
 
 [dev-dependencies]
 hyper = "1"
@@ -96,10 +100,13 @@ path = "examples/rmcp_mcp_server.rs"
 
 [lints.rust]
 warnings = "deny"
-# Substrate has two legitimate unsafe `libc::kill` call sites in the chaos
-# activation (POSIX signal primitives have no safe wrapper in std). We keep
-# the workspace posture at "deny" and add narrow `#[allow(unsafe_code)]` at
-# those two sites with comments. Do not downgrade without a new use case.
+# Substrate's DEFAULT library compiles with ZERO unsafe. The two narrow
+# `libc::kill` call sites (POSIX signals, no safe std wrapper) live in the
+# `chaos` activation, which is gated behind the `chaos` feature flag —
+# opt-in, default-off. Those sites carry narrow `#[allow(unsafe_code)]` that
+# only activate when `--features chaos` is set. Upgrade to `"forbid"` only
+# if chaos is extracted to a separate crate; until then, `"deny"` + narrow
+# allows is the compatible posture.
 unsafe_code = "deny"
 # `unused_crate_dependencies` produces structural false positives in multi-
 # target crates (substrate ships a lib + 2 bins + examples; several deps are

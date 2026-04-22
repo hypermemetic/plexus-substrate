@@ -6,6 +6,7 @@ use std::sync::{Arc, Weak};
 
 use crate::activations::arbor::{Arbor, ArborConfig};
 use crate::activations::bash::Bash;
+#[cfg(feature = "chaos")]
 use crate::activations::chaos::Chaos;
 use crate::activations::claudecode::{ClaudeCode, ClaudeCodeStorage, ClaudeCodeStorageConfig};
 use crate::activations::claudecode_loopback::{ClaudeCodeLoopback, LoopbackStorageConfig};
@@ -140,12 +141,17 @@ pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
         let _ = orcha_for_recovery.set(orcha.clone());
 
         // Build and return the DynamicHub with "substrate" namespace
-        DynamicHub::new("substrate")
+        let hub = DynamicHub::new("substrate")
             .register(Health::new())
             .register(Echo::new())
-            .register(Bash::new())
-            .register(Chaos::new(lattice.storage()))
-            .register(arbor)
+            .register(Bash::new());
+
+        // Chaos activation is feature-gated — off by default because it pulls
+        // in libc + narrow unsafe signal primitives.
+        #[cfg(feature = "chaos")]
+        let hub = hub.register(Chaos::new(lattice.storage()));
+
+        hub.register(arbor)
             .register(cone)
             .register(claudecode)
             .register(mustache)
