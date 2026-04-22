@@ -59,7 +59,7 @@ pub enum MessageRole {
 }
 
 impl MessageRole {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
@@ -67,6 +67,10 @@ impl MessageRole {
         }
     }
 
+    // Returns `Option<Self>` (not `Result`), so intentionally does not
+    // implement `std::str::FromStr`. Callers pass DB column strings where
+    // `None` is the expected signal for unknown values.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "user" => Some(MessageRole::User),
@@ -92,7 +96,7 @@ pub struct Message {
     pub output_tokens: Option<i64>,
 }
 
-/// A position in the context tree - couples tree_id and node_id together.
+/// A position in the context tree - couples `tree_id` and `node_id` together.
 /// This ensures we always have a valid reference into a specific tree.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Position {
@@ -104,12 +108,12 @@ pub struct Position {
 
 impl Position {
     /// Create a new position
-    pub fn new(tree_id: TreeId, node_id: NodeId) -> Self {
+    pub const fn new(tree_id: TreeId, node_id: NodeId) -> Self {
         Self { tree_id, node_id }
     }
 
     /// Advance to a new node in the same tree
-    pub fn advance(&self, new_node_id: NodeId) -> Self {
+    pub const fn advance(&self, new_node_id: NodeId) -> Self {
         Self {
             tree_id: self.tree_id,
             node_id: new_node_id,
@@ -129,7 +133,7 @@ pub struct ConeConfig {
     /// System prompt / instructions for the cone
     pub system_prompt: Option<String>,
     /// The canonical head - current position in conversation tree
-    /// This couples tree_id and node_id together
+    /// This couples `tree_id` and `node_id` together
     pub head: Position,
     /// Additional configuration metadata
     pub metadata: Option<Value>,
@@ -141,12 +145,12 @@ pub struct ConeConfig {
 
 impl ConeConfig {
     /// Get the tree ID (convenience accessor)
-    pub fn tree_id(&self) -> TreeId {
+    pub const fn tree_id(&self) -> TreeId {
         self.head.tree_id
     }
 
     /// Get the current node ID (convenience accessor)
-    pub fn node_id(&self) -> NodeId {
+    pub const fn node_id(&self) -> NodeId {
         self.head.node_id
     }
 }
@@ -252,7 +256,7 @@ pub enum ChatEvent {
     Error { message: String },
 }
 
-/// Result of cone.set_head
+/// Result of `cone.set_head`
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum SetHeadResult {

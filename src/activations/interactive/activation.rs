@@ -7,7 +7,7 @@
 //! - Graceful handling of non-bidirectional transports
 //!
 //! The methods use `StandardBidirChannel` for common UI patterns.
-//! For custom request/response types, see the ImageProcessor example.
+//! For custom request/response types, see the `ImageProcessor` example.
 
 use super::types::{ConfirmEvent, DeleteEvent, WizardEvent};
 use async_stream::stream;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub struct Interactive;
 
 impl Interactive {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Interactive
     }
 }
@@ -105,8 +105,7 @@ impl Interactive {
 
             // Step 3: Confirm creation
             let confirmed = match ctx.confirm(&format!(
-                "Create project '{}' with '{}' template?"
-            , name, template)).await {
+                "Create project '{name}' with '{template}' template?")).await {
                 Ok(c) => c,
                 Err(BidirError::Cancelled) => {
                     yield WizardEvent::Cancelled;

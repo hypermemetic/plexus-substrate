@@ -45,11 +45,14 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
 
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+    # Fails on any warning. The strict lint posture (unsafe_code, unreachable_pub,
+    # missing_debug_implementations, clippy pedantic/nursery) is declared in
+    # Cargo.toml's [lints.rust] + [lints.clippy] tables; this job is the gate.
+    - name: Build (strict)
+      run: cargo build --verbose --all-targets --all-features
 
-    - name: Build
-      run: cargo build --verbose --all-features
+    - name: Run clippy (strict)
+      run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Run tests
       run: cargo nextest run --verbose --all-features

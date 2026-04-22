@@ -1,6 +1,6 @@
-/// Identifier types for the Cone plugin
-///
-/// Provides flexible identification of cones by name or UUID.
+//! Identifier types for the Cone plugin
+//!
+//! Provides flexible identification of cones by name or UUID.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

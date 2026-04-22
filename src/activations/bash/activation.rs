@@ -9,7 +9,7 @@ pub struct Bash {
 }
 
 impl Bash {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             executor: BashExecutor::new(),
         }
@@ -102,7 +102,7 @@ mod tests {
 
         // Print the plugin schema
         let json = serde_json::to_string_pretty(&schema).unwrap();
-        println!("Bash plugin_schema():\n{}", json);
+        println!("Bash plugin_schema():\n{json}");
 
         // Verify returns includes BashEvent variants
         let returns_json = serde_json::to_string(&execute.returns).unwrap();

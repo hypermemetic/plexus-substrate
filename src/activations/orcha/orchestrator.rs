@@ -1,6 +1,6 @@
 use super::context::OrchaContext;
 use super::storage::OrchaStorage;
-use super::types::*;
+use super::types::{RunTaskRequest, OrchaEvent, AgentMode, SessionState, ValidationArtifact, ValidationResult, AgentInfo, AgentState, SessionId};
 use crate::activations::arbor::ArborStorage;
 use crate::activations::claudecode::{ChatEvent, ClaudeCode, Model};
 use crate::activations::claudecode_loopback::ClaudeCodeLoopback;
@@ -20,8 +20,8 @@ use uuid::Uuid;
 /// 4. Extracts validation artifacts from agent output
 /// 5. Runs tests and auto-retries on failure
 ///
-/// Returns a stream of OrchaEvent items showing progress
-pub async fn run_orchestration_task<P: HubContext>(
+/// Returns a stream of `OrchaEvent` items showing progress
+pub(super) async fn run_orchestration_task<P: HubContext>(
     storage: Arc<OrchaStorage>,
     arbor: Arc<ArborStorage>,
     claudecode: Arc<ClaudeCode<P>>,
@@ -62,7 +62,7 @@ pub async fn run_orchestration_task<P: HubContext>(
             Err(e) => {
                 yield OrchaEvent::Failed {
                     session_id: session_id.clone(),
-                    error: format!("Failed to create orcha session: {}", e),
+                    error: format!("Failed to create orcha session: {e}"),
                 };
                 return;
             }
@@ -84,12 +84,12 @@ pub async fn run_orchestration_task<P: HubContext>(
         };
 
         // Stable session name for this Orcha session's claudecode record.
-        let cc_session_name = format!("{}-cc", session_id);
+        let cc_session_name = format!("{session_id}-cc");
 
         // 2. Create claudecode session with loopback enabled (once before retry loop)
         if request.verbose {
             yield OrchaEvent::Progress {
-                message: format!("Creating Claude Code session: {}", cc_session_name),
+                message: format!("Creating Claude Code session: {cc_session_name}"),
                 percentage: Some(10.0),
             };
         }
@@ -121,7 +121,7 @@ pub async fn run_orchestration_task<P: HubContext>(
                     ctx.claude_session_created(id_str, cc_session_name.clone()).await;
                     if request.verbose {
                         yield OrchaEvent::Progress {
-                            message: format!("Created Claude Code session: {}", id),
+                            message: format!("Created Claude Code session: {id}"),
                             percentage: Some(20.0),
                         };
                     }
@@ -129,22 +129,19 @@ pub async fn run_orchestration_task<P: HubContext>(
                 crate::activations::claudecode::CreateResult::Err { message } => {
                     yield OrchaEvent::Failed {
                         session_id: session_id.clone(),
-                        error: format!("Failed to create Claude Code session: {}", message),
+                        error: format!("Failed to create Claude Code session: {message}"),
                     };
                     return;
                 }
             }
         }
 
-        let cc_session_id = match cc_session_id {
-            Some(id) => id,
-            None => {
-                yield OrchaEvent::Failed {
-                    session_id: session_id.clone(),
-                    error: "Failed to create Claude Code session: no response".to_string(),
-                };
-                return;
-            }
+        let cc_session_id = if let Some(id) = cc_session_id { id } else {
+            yield OrchaEvent::Failed {
+                session_id: session_id.clone(),
+                error: "Failed to create Claude Code session: no response".to_string(),
+            };
+            return;
         };
 
         // Retry loop for validation failures
@@ -301,7 +298,7 @@ pub async fn run_orchestration_task<P: HubContext>(
                     ChatEvent::Err { message } => {
                         yield OrchaEvent::Failed {
                             session_id: session_id.clone(),
-                            error: format!("Chat error: {}", message),
+                            error: format!("Chat error: {message}"),
                         };
                         return;
                     }
@@ -361,62 +358,59 @@ pub async fn run_orchestration_task<P: HubContext>(
                         session_id: session_id.clone(),
                     };
                     return;
-                } else {
-                    // Validation failed - check if we can retry
-                    retry_count += 1;
+                }
+                // Validation failed - check if we can retry
+                retry_count += 1;
 
-                    if retry_count >= request.max_retries {
-                        // Max retries exceeded
-                        if let Err(e) = storage.update_state(&session_id, SessionState::Failed {
-                            error: format!("Validation failed after {} retries", retry_count),
-                        }).await {
-                            tracing::warn!("Failed to update session {} state to Failed: {}", session_id, e);
-                        }
-
-                        yield OrchaEvent::Failed {
-                            session_id: session_id.clone(),
-                            error: format!("Validation failed after {} retries", retry_count),
-                        };
-                        return;
-                    } else {
-                        // Increment retry counter and loop again
-                        if let Err(e) = storage.increment_retry(&session_id).await {
-                            tracing::warn!("Failed to increment retry counter for session {}: {}", session_id, e);
-                        }
-
-                        if request.verbose {
-                            yield OrchaEvent::RetryAttempt {
-                                attempt: retry_count,
-                                max_retries: request.max_retries,
-                                reason: "Validation test failed".to_string(),
-                            };
-                        }
-
-                        // Continue to next iteration of the retry loop
-                        continue;
+                if retry_count >= request.max_retries {
+                    // Max retries exceeded
+                    if let Err(e) = storage.update_state(&session_id, SessionState::Failed {
+                        error: format!("Validation failed after {retry_count} retries"),
+                    }).await {
+                        tracing::warn!("Failed to update session {} state to Failed: {}", session_id, e);
                     }
-                }
-            } else {
-                // No validation artifact found - treat as success
-                if let Err(e) = storage.update_state(&session_id, SessionState::Complete).await {
-                    tracing::warn!("Failed to update session {} state to Complete: {}", session_id, e);
-                }
 
-                // Record session completion in arbor via context
-                ctx.session_complete("success_no_validation").await;
+                    yield OrchaEvent::Failed {
+                        session_id: session_id.clone(),
+                        error: format!("Validation failed after {retry_count} retries"),
+                    };
+                    return;
+                }
+                // Increment retry counter and loop again
+                if let Err(e) = storage.increment_retry(&session_id).await {
+                    tracing::warn!("Failed to increment retry counter for session {}: {}", session_id, e);
+                }
 
                 if request.verbose {
-                    yield OrchaEvent::StateChange {
-                        session_id: session_id.clone(),
-                        state: SessionState::Complete,
+                    yield OrchaEvent::RetryAttempt {
+                        attempt: retry_count,
+                        max_retries: request.max_retries,
+                        reason: "Validation test failed".to_string(),
                     };
                 }
 
-                yield OrchaEvent::Complete {
-                    session_id: session_id.clone(),
-                };
-                return;
+                // Continue to next iteration of the retry loop
+                continue;
             }
+            // No validation artifact found - treat as success
+            if let Err(e) = storage.update_state(&session_id, SessionState::Complete).await {
+                tracing::warn!("Failed to update session {} state to Complete: {}", session_id, e);
+            }
+
+            // Record session completion in arbor via context
+            ctx.session_complete("success_no_validation").await;
+
+            if request.verbose {
+                yield OrchaEvent::StateChange {
+                    session_id: session_id.clone(),
+                    state: SessionState::Complete,
+                };
+            }
+
+            yield OrchaEvent::Complete {
+                session_id: session_id.clone(),
+            };
+            return;
         }
     }
 }
@@ -464,12 +458,12 @@ async fn run_validation_test(artifact: &ValidationArtifact) -> ValidationResult 
         Ok(output) => ValidationResult {
             success: output.status.success(),
             output: String::from_utf8_lossy(&output.stdout).to_string()
-                + &String::from_utf8_lossy(&output.stderr).to_string(),
+                + String::from_utf8_lossy(&output.stderr).as_ref(),
             exit_code: output.status.code(),
         },
         Err(e) => ValidationResult {
             success: false,
-            output: format!("Failed to execute command: {}", e),
+            output: format!("Failed to execute command: {e}"),
             exit_code: None,
         },
     }
@@ -504,7 +498,7 @@ async fn handle_tool_approval<P: HubContext>(
     let approval_id = loop {
         let approvals = loopback.storage().get_pending_approvals(&cc_session_id).await;
         if let Some(a) = approvals.iter().find(|a| a.tool_use_id == tool_use_id) {
-            break a.id.clone();
+            break a.id;
         }
 
         let now = tokio::time::Instant::now();
@@ -624,7 +618,7 @@ async fn handle_tool_approval<P: HubContext>(
 
 /// Configuration for running an agent task
 #[allow(dead_code)]
-pub struct AgentConfig {
+pub(super) struct AgentConfig {
     pub model: Model,
     pub working_directory: String,
     pub max_retries: u32,
@@ -634,12 +628,12 @@ pub struct AgentConfig {
 
 /// Result of running an agent task
 #[allow(dead_code)]
-pub enum AgentTaskResult {
+pub(super) enum AgentTaskResult {
     Success { validation_result: Option<ValidationResult> },
     Failed { error: String },
 }
 
-/// Run a single agent task (extracted core from run_orchestration_task)
+/// Run a single agent task (extracted core from `run_orchestration_task`)
 ///
 /// This handles the lifecycle of ONE agent:
 /// - Creates claudecode session
@@ -649,7 +643,7 @@ pub enum AgentTaskResult {
 /// - Updates agent state (not session state)
 ///
 /// Returns success/failure result (does not stream events)
-pub async fn run_agent_task<P: HubContext>(
+pub(super) async fn run_agent_task<P: HubContext>(
     storage: Arc<OrchaStorage>,
     claudecode: Arc<ClaudeCode<P>>,
     loopback: Arc<ClaudeCodeLoopback>,
@@ -748,7 +742,7 @@ pub async fn run_agent_task<P: HubContext>(
                     if let Err(e) = storage.update_agent_state(
                         &agent_info.agent_id,
                         AgentState::Failed {
-                            error: format!("Chat error: {}", message),
+                            error: format!("Chat error: {message}"),
                         }
                     ).await {
                         tracing::warn!("Failed to update agent {} state to Failed: {}", agent_info.agent_id, e);
@@ -789,46 +783,43 @@ pub async fn run_agent_task<P: HubContext>(
                 return AgentTaskResult::Success {
                     validation_result: Some(validation_result),
                 };
-            } else {
-                // Validation failed - retry?
-                retry_count += 1;
+            }
+            // Validation failed - retry?
+            retry_count += 1;
 
-                if retry_count >= config.max_retries {
-                    if let Err(e) = storage.update_agent_state(
-                        &agent_info.agent_id,
-                        AgentState::Failed {
-                            error: format!("Validation failed after {} retries", retry_count),
-                        }
-                    ).await {
-                        tracing::warn!("Failed to update agent {} state to Failed: {}", agent_info.agent_id, e);
+            if retry_count >= config.max_retries {
+                if let Err(e) = storage.update_agent_state(
+                    &agent_info.agent_id,
+                    AgentState::Failed {
+                        error: format!("Validation failed after {retry_count} retries"),
                     }
-
-                    return AgentTaskResult::Failed {
-                        error: format!("Validation failed after {} retries", retry_count),
-                    };
-                } else {
-                    // Loop and retry
-                    continue;
+                ).await {
+                    tracing::warn!("Failed to update agent {} state to Failed: {}", agent_info.agent_id, e);
                 }
-            }
-        } else {
-            // No validation - treat as success
-            if let Err(e) = storage.update_agent_state(
-                &agent_info.agent_id,
-                AgentState::Complete,
-            ).await {
-                tracing::warn!("Failed to update agent {} state to Complete: {}", agent_info.agent_id, e);
-            }
 
-            return AgentTaskResult::Success {
-                validation_result: None,
-            };
+                return AgentTaskResult::Failed {
+                    error: format!("Validation failed after {retry_count} retries"),
+                };
+            }
+            // Loop and retry
+            continue;
         }
+        // No validation - treat as success
+        if let Err(e) = storage.update_agent_state(
+            &agent_info.agent_id,
+            AgentState::Complete,
+        ).await {
+            tracing::warn!("Failed to update agent {} state to Complete: {}", agent_info.agent_id, e);
+        }
+
+        return AgentTaskResult::Success {
+            validation_result: None,
+        };
     }
 }
 
 /// Spawn a background task to run an agent
-pub fn spawn_agent_task<P: HubContext + 'static>(
+pub(super) fn spawn_agent_task<P: HubContext + 'static>(
     storage: Arc<OrchaStorage>,
     claudecode: Arc<ClaudeCode<P>>,
     loopback: Arc<ClaudeCodeLoopback>,
@@ -862,7 +853,7 @@ pub fn spawn_agent_task<P: HubContext + 'static>(
 }
 
 /// Check if all agents in a session are complete
-pub async fn check_session_completion(storage: &OrchaStorage, session_id: &SessionId) {
+pub(super) async fn check_session_completion(storage: &OrchaStorage, session_id: &SessionId) {
     match storage.get_agent_counts(session_id).await {
         Ok((active, completed, failed)) => {
             if active == 0 {
@@ -890,7 +881,7 @@ pub async fn check_session_completion(storage: &OrchaStorage, session_id: &Sessi
                     if let Err(e) = storage.update_state(
                         session_id,
                         SessionState::Failed {
-                            error: format!("{} agents failed", failed),
+                            error: format!("{failed} agents failed"),
                         }
                     ).await {
                         tracing::warn!("Failed to update session {} state to Failed: {}", session_id, e);
@@ -945,12 +936,9 @@ async fn handle_agent_spawn_request<P: HubContext>(
     use futures::StreamExt;
 
     // Extract subtask from input
-    let subtask = match input.get("subtask").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => {
-            tracing::warn!("spawn_helper_agent called without subtask");
-            return;
-        }
+    let subtask = if let Some(s) = input.get("subtask").and_then(|v| v.as_str()) { s.to_string() } else {
+        tracing::warn!("spawn_helper_agent called without subtask");
+        return;
     };
 
     // Get session to check model and working_directory
@@ -976,7 +964,7 @@ async fn handle_agent_spawn_request<P: HubContext>(
     let create_stream = claudecode.create(
         cc_session_name.clone(),
         "/workspace".to_string(), // TODO: Get from session
-        model.clone(),
+        model,
         None,
         Some(true), // Loopback enabled
         Some(session.session_id.clone()), // Use parent session_id for MCP URL transparency

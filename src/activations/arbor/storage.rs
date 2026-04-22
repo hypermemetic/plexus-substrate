@@ -19,7 +19,7 @@ pub struct ArborConfig {
     /// Duration before archived resources are purged (seconds)
     pub archive_window: i64, // Default: 30 days = 2592000
 
-    /// Path to SQLite database
+    /// Path to `SQLite` database
     pub db_path: PathBuf,
 
     /// Enable auto-cleanup background task
@@ -32,8 +32,8 @@ pub struct ArborConfig {
 impl Default for ArborConfig {
     fn default() -> Self {
         Self {
-            scheduled_deletion_window: 604800,  // 7 days
-            archive_window: 2592000,            // 30 days
+            scheduled_deletion_window: 604_800,  // 7 days
+            archive_window: 2_592_000,           // 30 days
             db_path: activation_db_path_from_module!("arbor.db"),
             auto_cleanup: true,
             cleanup_interval: 3600,             // 1 hour
@@ -45,7 +45,7 @@ impl Default for ArborConfig {
 ///
 /// # Usage Pattern: Direct Injection
 ///
-/// ArborStorage is **infrastructure** - activations should receive it directly
+/// `ArborStorage` is **infrastructure** - activations should receive it directly
 /// at construction time, NOT via Plexus routing.
 ///
 /// ```ignore
@@ -85,7 +85,7 @@ impl ArborStorage {
     /// Run database migrations
     async fn run_migrations(&self) -> Result<(), ArborError> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS trees (
                 id TEXT PRIMARY KEY,
                 root_node_id TEXT NOT NULL,
@@ -153,11 +153,11 @@ impl ArborStorage {
             CREATE INDEX IF NOT EXISTS idx_nodes_scheduled ON nodes(scheduled_deletion_at) WHERE state = 'scheduled_delete';
             CREATE INDEX IF NOT EXISTS idx_node_children_parent ON node_children(parent_id);
             CREATE INDEX IF NOT EXISTS idx_node_children_child ON node_children(child_id);
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| ArborError::InitError { detail: format!("Failed to run migrations: {}", e) })?;
+        .map_err(|e| ArborError::InitError { detail: format!("Failed to run migrations: {e}") })?;
 
         Ok(())
     }
@@ -182,7 +182,7 @@ impl ArborStorage {
         metadata: Option<serde_json::Value>,
         owner_id: &str,
     ) -> Result<TreeId, ArborError> {
-        let tree_id = tree_id.unwrap_or_else(TreeId::new);
+        let tree_id = tree_id.unwrap_or_default();
         let root_id = NodeId::new();
         let now = current_timestamp();
 
@@ -201,7 +201,7 @@ impl ArborStorage {
         .bind(metadata_json)
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to create tree: {}", e))?;
+        .map_err(|e| format!("Failed to create tree: {e}"))?;
 
         // Create tree ref for owner
         sqlx::query(
@@ -212,7 +212,7 @@ impl ArborStorage {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to create tree ref: {}", e))?;
+        .map_err(|e| format!("Failed to create tree ref: {e}"))?;
 
         // Create root node (empty text node)
         sqlx::query(
@@ -224,7 +224,7 @@ impl ArborStorage {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to create root node: {}", e))?;
+        .map_err(|e| format!("Failed to create root node: {e}"))?;
 
         tx.commit().await.map_err(|e| e.to_string())?;
 
@@ -262,12 +262,12 @@ impl ArborStorage {
         let state = ResourceState::from_str(&state_str).unwrap_or(ResourceState::Active);
 
         if !allow_archived && state == ResourceState::Archived {
-            return Err(ArborError::InvalidState { message: format!("Tree {} is archived, use tree_get_archived()", tree_id) });
+            return Err(ArborError::InvalidState { message: format!("Tree {tree_id} is archived, use tree_get_archived()") });
         }
 
         let root_node_id: String = tree_row.get("root_node_id");
         let root_node_id = ArborId::parse_str(&root_node_id)
-            .map_err(|e| format!("Invalid root node ID: {}", e))?;
+            .map_err(|e| format!("Invalid root node ID: {e}"))?;
 
         // Get all nodes for this tree
         let nodes = self.get_nodes_for_tree(tree_id).await?;
@@ -303,18 +303,18 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch nodes: {}", e))?;
+        .map_err(|e| format!("Failed to fetch nodes: {e}"))?;
 
         let mut nodes = HashMap::new();
 
         for row in rows {
             let node_id_str: String = row.get("id");
             let node_id = ArborId::parse_str(&node_id_str)
-                .map_err(|e| format!("Invalid node ID: {}", e))?;
+                .map_err(|e| format!("Invalid node ID: {e}"))?;
 
             let parent_id_str: Option<String> = row.get("parent_id");
             let parent_id = parent_id_str
-                .map(|s| ArborId::parse_str(&s).map_err(|e| format!("Invalid parent ID: {}", e)))
+                .map(|s| ArborId::parse_str(&s).map_err(|e| format!("Invalid parent ID: {e}")))
                 .transpose()?;
 
             // Get children for this node
@@ -329,7 +329,7 @@ impl ArborStorage {
                 "external" => {
                     let plugin_id_str: String = row.get("handle_plugin_id");
                     let plugin_id = Uuid::parse_str(&plugin_id_str)
-                        .map_err(|e| format!("Invalid handle plugin_id: {}", e))?;
+                        .map_err(|e| format!("Invalid handle plugin_id: {e}"))?;
                     let version: String = row.get("handle_version");
                     let method: String = row.get("handle_method");
                     let meta_json: Option<String> = row.get("handle_meta");
@@ -342,7 +342,7 @@ impl ArborStorage {
                             .with_meta(meta),
                     }
                 }
-                _ => return Err(format!("Unknown node type: {}", node_type_str).into()),
+                _ => return Err(format!("Unknown node type: {node_type_str}").into()),
             };
 
             let state_str: String = row.get("state");
@@ -380,21 +380,21 @@ impl ArborStorage {
         .bind(node_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch node children: {}", e))?;
+        .map_err(|e| format!("Failed to fetch node children: {e}"))?;
 
         let children: Result<Vec<NodeId>, ArborError> = rows
             .iter()
             .map(|row| {
                 let child_id_str: String = row.get("child_id");
                 ArborId::parse_str(&child_id_str)
-                    .map_err(|e| e.into())
+                    .map_err(std::convert::Into::into)
             })
             .collect();
 
         children
     }
 
-    /// Add a child to a parent in the node_children table
+    /// Add a child to a parent in the `node_children` table
     async fn add_child_to_parent(&self, parent_id: &NodeId, child_id: &NodeId) -> Result<(), ArborError> {
         // Get next position for this parent
         let row = sqlx::query(
@@ -403,7 +403,7 @@ impl ArborStorage {
         .bind(parent_id.to_string())
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get next position: {}", e))?;
+        .map_err(|e| format!("Failed to get next position: {e}"))?;
 
         let next_pos: i64 = row.get("next_pos");
 
@@ -415,7 +415,7 @@ impl ArborStorage {
         .bind(next_pos)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to add child to parent: {}", e))?;
+        .map_err(|e| format!("Failed to add child to parent: {e}"))?;
 
         Ok(())
     }
@@ -428,7 +428,7 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch tree refs: {}", e))?;
+        .map_err(|e| format!("Failed to fetch tree refs: {e}"))?;
 
         let mut owners = HashMap::new();
         let mut total = 0i64;
@@ -454,7 +454,7 @@ impl ArborStorage {
         .bind(node_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch node refs: {}", e))?;
+        .map_err(|e| format!("Failed to fetch node refs: {e}"))?;
 
         let mut owners = HashMap::new();
         let mut total = 0i64;
@@ -483,14 +483,14 @@ impl ArborStorage {
         let rows = sqlx::query(query)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| format!("Failed to list trees: {}", e))?;
+            .map_err(|e| format!("Failed to list trees: {e}"))?;
 
         let tree_ids: Result<Vec<TreeId>, ArborError> = rows
             .iter()
             .map(|row| {
                 let id_str: String = row.get("id");
                 ArborId::parse_str(&id_str)
-                    .map_err(|e| format!("Invalid tree ID: {}", e).into())
+                    .map_err(|e| format!("Invalid tree ID: {e}").into())
             })
             .collect();
 
@@ -504,14 +504,14 @@ impl ArborStorage {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list scheduled trees: {}", e))?;
+        .map_err(|e| format!("Failed to list scheduled trees: {e}"))?;
 
         let tree_ids: Result<Vec<TreeId>, ArborError> = rows
             .iter()
             .map(|row| {
                 let id_str: String = row.get("id");
                 ArborId::parse_str(&id_str)
-                    .map_err(|e| format!("Invalid tree ID: {}", e).into())
+                    .map_err(|e| format!("Invalid tree ID: {e}").into())
             })
             .collect();
 
@@ -525,14 +525,14 @@ impl ArborStorage {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list archived trees: {}", e))?;
+        .map_err(|e| format!("Failed to list archived trees: {e}"))?;
 
         let tree_ids: Result<Vec<TreeId>, ArborError> = rows
             .iter()
             .map(|row| {
                 let id_str: String = row.get("id");
                 ArborId::parse_str(&id_str)
-                    .map_err(|e| format!("Invalid tree ID: {}", e).into())
+                    .map_err(|e| format!("Invalid tree ID: {e}").into())
             })
             .collect();
 
@@ -547,7 +547,7 @@ impl ArborStorage {
     ) -> Result<(), ArborError> {
         let now = current_timestamp();
         let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            .map_err(|e| format!("Failed to serialize metadata: {e}"))?;
 
         sqlx::query(
             "UPDATE trees SET metadata = ?, updated_at = ? WHERE id = ? AND state = 'active'",
@@ -557,7 +557,7 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to update tree metadata: {}", e))?;
+        .map_err(|e| format!("Failed to update tree metadata: {e}"))?;
 
         Ok(())
     }
@@ -586,7 +586,7 @@ impl ArborStorage {
         let state = ResourceState::from_str(&state_str).unwrap_or(ResourceState::Active);
 
         if state == ResourceState::Archived {
-            return Err(ArborError::InvalidState { message: format!("Cannot claim archived tree {}", tree_id) });
+            return Err(ArborError::InvalidState { message: format!("Cannot claim archived tree {tree_id}") });
         }
 
         // If scheduled for deletion, reactivate it
@@ -598,7 +598,7 @@ impl ArborStorage {
             .bind(tree_id.to_string())
             .execute(&mut *tx)
             .await
-            .map_err(|e| format!("Failed to reactivate tree: {}", e))?;
+            .map_err(|e| format!("Failed to reactivate tree: {e}"))?;
         }
 
         // Update or insert tree_ref
@@ -615,7 +615,7 @@ impl ArborStorage {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to claim tree: {}", e))?;
+        .map_err(|e| format!("Failed to claim tree: {e}"))?;
 
         // Update tree ref_count
         sqlx::query(
@@ -626,14 +626,14 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to update tree ref_count: {}", e))?;
+        .map_err(|e| format!("Failed to update tree ref_count: {e}"))?;
 
         // Get the new ref_count
         let new_count_row = sqlx::query("SELECT ref_count FROM trees WHERE id = ?")
             .bind(tree_id.to_string())
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| format!("Failed to fetch new ref_count: {}", e))?;
+            .map_err(|e| format!("Failed to fetch new ref_count: {e}"))?;
 
         let new_count: i64 = new_count_row.get("ref_count");
 
@@ -659,14 +659,13 @@ impl ArborStorage {
         .bind(owner_id)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to fetch tree ref: {}", e))?
-        .ok_or_else(|| format!("No reference found for owner {}", owner_id))?;
+        .map_err(|e| format!("Failed to fetch tree ref: {e}"))?
+        .ok_or_else(|| format!("No reference found for owner {owner_id}"))?;
 
         let current_count: i64 = owner_ref.get("count");
         if current_count < count {
             return Err(format!(
-                "Cannot release {} references, owner only has {}",
-                count, current_count
+                "Cannot release {count} references, owner only has {current_count}"
             )
             .into());
         }
@@ -680,7 +679,7 @@ impl ArborStorage {
                 .bind(owner_id)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| format!("Failed to delete tree ref: {}", e))?;
+                .map_err(|e| format!("Failed to delete tree ref: {e}"))?;
         } else {
             sqlx::query(
                 "UPDATE tree_refs SET count = ?, claimed_at = ? WHERE tree_id = ? AND owner_id = ?",
@@ -691,7 +690,7 @@ impl ArborStorage {
             .bind(owner_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| format!("Failed to update tree ref: {}", e))?;
+            .map_err(|e| format!("Failed to update tree ref: {e}"))?;
         }
 
         // Update tree ref_count
@@ -703,14 +702,14 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to update tree ref_count: {}", e))?;
+        .map_err(|e| format!("Failed to update tree ref_count: {e}"))?;
 
         // Check if ref_count reached 0, schedule for deletion
         let tree_row = sqlx::query("SELECT ref_count FROM trees WHERE id = ?")
             .bind(tree_id.to_string())
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| format!("Failed to fetch tree: {}", e))?;
+            .map_err(|e| format!("Failed to fetch tree: {e}"))?;
 
         let ref_count: i64 = tree_row.get("ref_count");
         if ref_count == 0 {
@@ -722,7 +721,7 @@ impl ArborStorage {
             .bind(tree_id.to_string())
             .execute(&mut *tx)
             .await
-            .map_err(|e| format!("Failed to schedule tree deletion: {}", e))?;
+            .map_err(|e| format!("Failed to schedule tree deletion: {e}"))?;
         }
 
         tx.commit().await.map_err(|e| e.to_string())?;
@@ -754,7 +753,7 @@ impl ArborStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create text node: {}", e))?;
+        .map_err(|e| format!("Failed to create text node: {e}"))?;
 
         // Add to node_children table if parent is specified
         if let Some(parent_id) = parent {
@@ -793,7 +792,7 @@ impl ArborStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create external node: {}", e))?;
+        .map_err(|e| format!("Failed to create external node: {e}"))?;
 
         // Add to node_children table if parent is specified
         if let Some(parent_id) = parent {
@@ -833,7 +832,7 @@ impl ArborStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create ephemeral external node: {}", e))?;
+        .map_err(|e| format!("Failed to create ephemeral external node: {e}"))?;
 
         // Add to node_children table if parent is specified
         if let Some(parent_id) = parent {
@@ -869,14 +868,14 @@ impl ArborStorage {
         .bind(node_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch children: {}", e))?;
+        .map_err(|e| format!("Failed to fetch children: {e}"))?;
 
         let children: Result<Vec<NodeId>, ArborError> = rows
             .iter()
             .map(|row| {
                 let id_str: String = row.get("id");
                 ArborId::parse_str(&id_str)
-                    .map_err(|e| format!("Invalid node ID: {}", e).into())
+                    .map_err(|e| format!("Invalid node ID: {e}").into())
             })
             .collect();
 
@@ -903,7 +902,7 @@ impl ArborStorage {
         match parent_id {
             Some(id_str) => Ok(Some(
                 ArborId::parse_str(&id_str)
-                    .map_err(|e| format!("Invalid parent ID: {}", e))?,
+                    .map_err(|e| format!("Invalid parent ID: {e}"))?,
             )),
             None => Ok(None),
         }
@@ -943,14 +942,14 @@ impl ArborStorage {
         .bind(tree_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch leaf nodes: {}", e))?;
+        .map_err(|e| format!("Failed to fetch leaf nodes: {e}"))?;
 
         let leaves: Result<Vec<NodeId>, ArborError> = rows
             .iter()
             .map(|row| {
                 let id_str: String = row.get("id");
                 ArborId::parse_str(&id_str)
-                    .map_err(|e| format!("Invalid node ID: {}", e).into())
+                    .map_err(|e| format!("Invalid node ID: {e}").into())
             })
             .collect();
 
@@ -1013,19 +1012,19 @@ impl ArborStorage {
         .bind(seven_days_ago)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to archive trees: {}", e))?;
+        .map_err(|e| format!("Failed to archive trees: {e}"))?;
 
         Ok(result.rows_affected() as usize)
     }
 
-    /// Query trees by metadata filter (e.g., {"type": "orcha_monitor"})
+    /// Query trees by metadata filter (e.g., {"type": "`orcha_monitor`"})
     pub async fn tree_query_by_metadata(&self, filter: &Value) -> Result<Vec<TreeId>, ArborError> {
         let rows = sqlx::query(
             "SELECT id, metadata FROM trees WHERE state = 'active'"
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to query trees: {}", e))?;
+        .map_err(|e| format!("Failed to query trees: {e}"))?;
 
         let mut matching_trees = Vec::new();
 
@@ -1055,7 +1054,7 @@ fn metadata_matches(filter: &Value, metadata: &Value) -> bool {
         (Value::Object(filter_obj), Value::Object(meta_obj)) => {
             // Check if all filter keys exist in metadata with matching values
             filter_obj.iter().all(|(key, filter_value)| {
-                meta_obj.get(key).map_or(false, |meta_value| {
+                meta_obj.get(key).is_some_and(|meta_value| {
                     metadata_matches(filter_value, meta_value)
                 })
             })

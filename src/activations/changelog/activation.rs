@@ -19,7 +19,7 @@ impl Changelog {
     }
 
     /// Run startup check - called when Plexus RPC server starts
-    /// Returns (hash_changed, is_documented, message)
+    /// Returns (`hash_changed`, `is_documented`, message)
     pub async fn startup_check(&self, current_hash: &str) -> Result<(bool, bool, String), String> {
         let previous_hash = self.storage.get_last_hash().await?;
 
@@ -46,8 +46,7 @@ impl Changelog {
                     )
                 } else {
                     format!(
-                        "UNDOCUMENTED PLEXUS CHANGE: {} -> {}. Add changelog entry for hash '{}'",
-                        prev, current_hash, current_hash
+                        "UNDOCUMENTED PLEXUS CHANGE: {prev} -> {current_hash}. Add changelog entry for hash '{current_hash}'"
                     )
                 };
                 Ok((true, is_documented, message))
@@ -161,7 +160,7 @@ impl Changelog {
 
         stream! {
             let previous_hash = storage.get_last_hash().await.ok().flatten();
-            let hash_changed = previous_hash.as_ref().map(|p| p != &current_hash).unwrap_or(true);
+            let hash_changed = previous_hash.as_ref() != Some(&current_hash);
             let is_documented = storage.is_documented(&current_hash).await.unwrap_or(false);
 
             let message = if !hash_changed {
@@ -169,7 +168,7 @@ impl Changelog {
             } else if is_documented {
                 "Plexus change is documented".to_string()
             } else {
-                format!("UNDOCUMENTED: Add changelog entry for hash '{}'", current_hash)
+                format!("UNDOCUMENTED: Add changelog entry for hash '{current_hash}'")
             };
 
             yield ChangelogEvent::StartupCheck {

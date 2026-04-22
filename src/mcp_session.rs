@@ -1,7 +1,7 @@
 //! SQLite-backed MCP session manager for persistent sessions across restarts
 //!
-//! This module provides a SessionManager implementation that persists session
-//! state to SQLite, allowing clients to reconnect after server restarts.
+//! This module provides a `SessionManager` implementation that persists session
+//! state to `SQLite`, allowing clients to reconnect after server restarts.
 //!
 //! Sessions older than 30 days (configurable) are automatically cleaned up on startup.
 
@@ -38,10 +38,10 @@ use rmcp::{
 /// Default session cleanup age: 30 days
 pub const DEFAULT_SESSION_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// Configuration for SQLite session storage
+/// Configuration for `SQLite` session storage
 #[derive(Debug, Clone)]
 pub struct SqliteSessionConfig {
-    /// Path to SQLite database
+    /// Path to `SQLite` database
     pub db_path: PathBuf,
     /// Session worker configuration
     pub session_config: SessionConfig,
@@ -59,7 +59,7 @@ impl Default for SqliteSessionConfig {
     }
 }
 
-/// Error types for SQLite session manager
+/// Error types for `SQLite` session manager
 #[derive(Debug, Error)]
 pub enum SqliteSessionError {
     #[error("Session not found: {0}")]
@@ -74,7 +74,7 @@ pub enum SqliteSessionError {
 
 /// SQLite-backed session manager
 ///
-/// Persists session IDs to SQLite so clients can reconnect after server restart.
+/// Persists session IDs to `SQLite` so clients can reconnect after server restart.
 /// The actual session workers are created on-demand, but session identity persists.
 pub struct SqliteSessionManager {
     pool: SqlitePool,
@@ -86,17 +86,17 @@ pub struct SqliteSessionManager {
 }
 
 impl SqliteSessionManager {
-    /// Create a new SQLite session manager
+    /// Create a new `SQLite` session manager
     pub async fn new(config: SqliteSessionConfig) -> Result<Self, SqliteSessionError> {
         let db_url = format!("sqlite:{}?mode=rwc", config.db_path.display());
         let connect_options: SqliteConnectOptions = db_url
             .parse()
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to parse DB URL: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to parse DB URL: {e}")))?;
         let connect_options = connect_options.disable_statement_logging();
 
         let pool = SqlitePool::connect_with(connect_options)
             .await
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to connect: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to connect: {e}")))?;
 
         let manager = Self {
             pool,
@@ -130,14 +130,14 @@ impl SqliteSessionManager {
         let row = sqlx::query("SELECT COUNT(*) as count FROM mcp_sessions")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to count sessions: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to count sessions: {e}")))?;
 
         let count: i64 = sqlx::Row::get(&row, "count");
         Ok(count as usize)
     }
 
 
-    /// Clean up sessions older than max_session_age
+    /// Clean up sessions older than `max_session_age`
     ///
     /// Returns the number of sessions cleaned up
     pub async fn cleanup_old_sessions(&self) -> Result<usize, SqliteSessionError> {
@@ -151,7 +151,7 @@ impl SqliteSessionManager {
             .bind(cutoff)
             .execute(&self.pool)
             .await
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to cleanup sessions: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to cleanup sessions: {e}")))?;
 
         Ok(result.rows_affected() as usize)
     }
@@ -159,7 +159,7 @@ impl SqliteSessionManager {
     /// Run database migrations
     async fn run_migrations(&self) -> Result<(), SqliteSessionError> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS mcp_sessions (
                 id TEXT PRIMARY KEY,
                 created_at INTEGER NOT NULL,
@@ -177,11 +177,11 @@ impl SqliteSessionManager {
 
             CREATE INDEX IF NOT EXISTS idx_session_cache_session ON mcp_session_cache(session_id);
             CREATE INDEX IF NOT EXISTS idx_session_cache_event ON mcp_session_cache(session_id, event_id);
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| SqliteSessionError::DatabaseError(format!("Migration failed: {}", e)))?;
+        .map_err(|e| SqliteSessionError::DatabaseError(format!("Migration failed: {e}")))?;
 
         Ok(())
     }
@@ -201,7 +201,7 @@ impl SqliteSessionManager {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to persist session: {}", e)))?;
+        .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to persist session: {e}")))?;
 
         Ok(())
     }
@@ -218,7 +218,7 @@ impl SqliteSessionManager {
             .bind(id.as_ref())
             .execute(&self.pool)
             .await
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to touch session: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to touch session: {e}")))?;
 
         Ok(())
     }
@@ -229,7 +229,7 @@ impl SqliteSessionManager {
             .bind(id.as_ref())
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to check session: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to check session: {e}")))?;
 
         Ok(row.is_some())
     }
@@ -240,7 +240,7 @@ impl SqliteSessionManager {
             .bind(id.as_ref())
             .execute(&self.pool)
             .await
-            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to remove session: {}", e)))?;
+            .map_err(|e| SqliteSessionError::DatabaseError(format!("Failed to remove session: {e}")))?;
 
         Ok(())
     }

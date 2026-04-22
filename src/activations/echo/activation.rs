@@ -20,7 +20,7 @@ use std::time::Duration;
 pub struct Echo;
 
 impl Echo {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Echo
     }
 }
@@ -32,10 +32,10 @@ impl Default for Echo {
 }
 
 /// Hub-macro generates all the boilerplate for this impl block:
-/// - EchoRpc trait with JSON-RPC subscription methods
-/// - EchoRpcServer implementation
+/// - `EchoRpc` trait with JSON-RPC subscription methods
+/// - `EchoRpcServer` implementation
 /// - Activation trait implementation
-/// - EchoMethod enum with JSON schemas
+/// - `EchoMethod` enum with JSON schemas
 #[plexus_macros::activation(namespace = "echo",
 version = "1.0.0",
 description = "Echo messages back - demonstrates plexus-macros usage")]

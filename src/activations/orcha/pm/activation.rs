@@ -13,7 +13,7 @@ use super::storage::PmStorage;
 // ─── Result types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PmTicketStatus {
+pub(super) struct PmTicketStatus {
     pub ticket_id: String,
     pub node_id: String,
     pub status: String,
@@ -24,7 +24,7 @@ pub struct PmTicketStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PmGraphStatusResult {
+pub(super) enum PmGraphStatusResult {
     Ok {
         graph_id: String,
         graph_status: String,
@@ -37,7 +37,7 @@ pub enum PmGraphStatusResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PmWhatNextResult {
+pub(super) enum PmWhatNextResult {
     Ok {
         graph_id: String,
         tickets: Vec<PmTicketStatus>,
@@ -49,7 +49,7 @@ pub enum PmWhatNextResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PmInspectResult {
+pub(super) enum PmInspectResult {
     Ok {
         ticket_id: String,
         node_id: String,
@@ -71,7 +71,7 @@ pub enum PmInspectResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PmWhyBlockedResult {
+pub(super) enum PmWhyBlockedResult {
     Ok {
         ticket_id: String,
         blocked_by: Vec<PmTicketStatus>,
@@ -85,19 +85,19 @@ pub enum PmWhyBlockedResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PmGraphSummary {
+pub(super) struct PmGraphSummary {
     pub graph_id: String,
     pub status: String,
     pub metadata: Value,
     pub ticket_count: usize,
     pub created_at: i64,
-    /// Original task description passed to run_plan / run_tickets (first 200 chars).
+    /// Original task description passed to `run_plan` / `run_tickets` (first 200 chars).
     pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PmListGraphsResult {
+pub(super) enum PmListGraphsResult {
     Ok {
         graphs: Vec<PmGraphSummary>,
     },
@@ -115,7 +115,7 @@ pub struct Pm {
 }
 
 impl Pm {
-    pub fn new(pm_storage: Arc<PmStorage>, lattice_storage: Arc<LatticeStorage>) -> Self {
+    pub const fn new(pm_storage: Arc<PmStorage>, lattice_storage: Arc<LatticeStorage>) -> Self {
         Self { pm_storage, lattice_storage }
     }
 
@@ -128,7 +128,7 @@ impl Pm {
         self.pm_storage.save_ticket_map(graph_id, map).await
     }
 
-    /// Fetch the ticket_id→node_id map for a graph.
+    /// Fetch the `ticket_id→node_id` map for a graph.
     pub async fn get_ticket_map(&self, graph_id: &str) -> Result<HashMap<String, String>, String> {
         self.pm_storage.get_ticket_map(graph_id).await
     }
@@ -141,7 +141,7 @@ impl Pm {
         Ok(entries.into_iter().map(|(id, _)| id).collect())
     }
 
-    /// Save the raw ticket source for a graph (called by run_tickets / run_tickets_async).
+    /// Save the raw ticket source for a graph (called by `run_tickets` / `run_tickets_async`).
     pub async fn save_ticket_source(&self, graph_id: &str, source: &str) -> Result<(), String> {
         self.pm_storage.save_ticket_source(graph_id, source).await
     }
@@ -153,7 +153,7 @@ impl Pm {
 
     /// Append a single event to the node execution log.
     ///
-    /// Called from `dispatch_task` for each ChatEvent and the final outcome.
+    /// Called from `dispatch_task` for each `ChatEvent` and the final outcome.
     pub async fn log_node_event(
         &self,
         graph_id: &str,
@@ -175,7 +175,7 @@ impl Pm {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn node_status_str(status: &NodeStatus) -> &'static str {
+const fn node_status_str(status: &NodeStatus) -> &'static str {
     match status {
         NodeStatus::Pending => "pending",
         NodeStatus::Ready => "ready",
@@ -265,7 +265,7 @@ impl Pm {
                             node.output.as_ref().and_then(|o| {
                                 if let crate::activations::lattice::NodeOutput::Single(token) = o {
                                     if let Some(crate::activations::lattice::TokenPayload::Data { value }) = &token.payload {
-                                        value.get("child_graph_id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                        value.get("child_graph_id").and_then(|v| v.as_str()).map(std::string::ToString::to_string)
                                     } else { None }
                                 } else { None }
                             })
@@ -283,7 +283,7 @@ impl Pm {
                     }
                     Err(e) => {
                         yield PmGraphStatusResult::Err {
-                            message: format!("Failed to get node {}: {}", node_id, e),
+                            message: format!("Failed to get node {node_id}: {e}"),
                         };
                         return;
                     }
@@ -345,7 +345,7 @@ impl Pm {
                     }
                     Err(e) => {
                         yield PmWhatNextResult::Err {
-                            message: format!("Failed to get node {}: {}", node_id, e),
+                            message: format!("Failed to get node {node_id}: {e}"),
                         };
                         return;
                     }
@@ -375,16 +375,13 @@ impl Pm {
                 Err(e) => { yield PmInspectResult::Err { message: e }; return; }
             };
 
-            let node_id = match ticket_map.get(&ticket_id) {
-                Some(id) => id.clone(),
-                None => { yield PmInspectResult::NotFound { ticket_id }; return; }
-            };
+            let node_id = if let Some(id) = ticket_map.get(&ticket_id) { id.clone() } else { yield PmInspectResult::NotFound { ticket_id }; return; };
 
             let node = match lattice_storage.get_node(&node_id).await {
                 Ok(n) => n,
                 Err(e) => {
                     yield PmInspectResult::Err {
-                        message: format!("Failed to get node: {}", e),
+                        message: format!("Failed to get node: {e}"),
                     };
                     return;
                 }
@@ -400,7 +397,7 @@ impl Pm {
                 .and_then(|p| p.get("value"))
                 .and_then(|v| v.get("child_graph_id"))
                 .and_then(|id| id.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
 
             match &node.spec {
                 NodeSpec::Task { data, .. } => {
@@ -494,21 +491,18 @@ impl Pm {
                 Err(e) => { yield PmWhyBlockedResult::Err { message: e }; return; }
             };
 
-            let node_id = match ticket_map.get(&ticket_id) {
-                Some(id) => id.clone(),
-                None => {
-                    yield PmWhyBlockedResult::Err {
-                        message: format!("Ticket not found: {}", ticket_id),
-                    };
-                    return;
-                }
+            let node_id = if let Some(id) = ticket_map.get(&ticket_id) { id.clone() } else {
+                yield PmWhyBlockedResult::Err {
+                    message: format!("Ticket not found: {ticket_id}"),
+                };
+                return;
             };
 
             let predecessors = match lattice_storage.get_inbound_edges(&node_id).await {
                 Ok(p) => p,
                 Err(e) => {
                     yield PmWhyBlockedResult::Err {
-                        message: format!("Failed to get predecessors: {}", e),
+                        message: format!("Failed to get predecessors: {e}"),
                     };
                     return;
                 }
@@ -626,10 +620,7 @@ impl Pm {
                     }
                 }
 
-                let ticket_map = match pm_storage.get_ticket_map(&graph_id).await {
-                    Ok(m) => m,
-                    Err(_) => HashMap::new(),
-                };
+                let ticket_map = pm_storage.get_ticket_map(&graph_id).await.unwrap_or_default();
 
                 let status = lattice_graph.status.to_string();
 
@@ -663,8 +654,8 @@ impl Pm {
     /// Retrieve the full execution log for a node.
     ///
     /// Returns all events recorded by `dispatch_task` in sequence order:
-    /// "prompt" (task sent to Claude), "start" (session created), "tool_use",
-    /// "tool_result", "complete", "error", "passthrough", "outcome" (final result).
+    /// "prompt" (task sent to Claude), "start" (session created), "`tool_use`",
+    /// "`tool_result`", "complete", "error", "passthrough", "outcome" (final result).
     ///
     /// Use this to diagnose why a node failed or produced unexpected output.
     #[plexus_macros::method(params(

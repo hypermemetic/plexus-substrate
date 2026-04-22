@@ -13,7 +13,7 @@ use tempfile::{tempdir, TempDir};
 // Schema validation tests (moved from mod.rs)
 // ============================================================================
 
-/// Test that RegistryResult schema has proper structure with RegistryExport fields.
+/// Test that `RegistryResult` schema has proper structure with `RegistryExport` fields.
 #[test]
 fn test_registry_result_schema_has_all_fields() {
     let schema = schemars::schema_for!(RegistryResult);
@@ -162,7 +162,7 @@ async fn test_cone_message_to_arbor_handle_direct() {
         .await
         .unwrap();
 
-    println!("Created user node in arbor: {}", user_node_id);
+    println!("Created user node in arbor: {user_node_id}");
 
     // 5. Create an assistant message
     let assistant_message = cone_storage
@@ -191,7 +191,7 @@ async fn test_cone_message_to_arbor_handle_direct() {
         .await
         .unwrap();
 
-    println!("Created assistant node in arbor: {}", assistant_node_id);
+    println!("Created assistant node in arbor: {assistant_node_id}");
 
     // 7. Update cone head
     cone_storage.cone_update_head(&cone.id, assistant_node_id).await.unwrap();
@@ -201,7 +201,7 @@ async fn test_cone_message_to_arbor_handle_direct() {
     let rendered = tree.render();
 
     println!("\n=== Tree Render ===");
-    println!("{}", rendered);
+    println!("{rendered}");
     println!("==================\n");
 
     // 9. Verify tree structure
@@ -286,7 +286,7 @@ async fn test_multi_turn_conversation() {
     let rendered = tree.render();
 
     println!("\n=== Multi-turn Conversation Tree ===");
-    println!("{}", rendered);
+    println!("{rendered}");
     println!("====================================\n");
 
     // Verify structure: root + 6 messages
@@ -380,7 +380,7 @@ async fn test_cone_uses_arbor_directly() {
     let rendered = tree.render();
 
     println!("\n=== Tree (direct ArborStorage render) ===");
-    println!("{}", rendered);
+    println!("{rendered}");
     println!("==========================================\n");
 
     // Verify structure
@@ -464,13 +464,13 @@ async fn test_render_resolved_with_mock_resolver() {
                 Ok(message) => {
                     format!("[{}] {}", message.role.as_str(), message.content)
                 }
-                Err(_) => format!("[unresolved: {}]", identifier),
+                Err(_) => format!("[unresolved: {identifier}]"),
             }
         }
     }).await;
 
     println!("\n=== Tree (render_resolved with mock resolver) ===");
-    println!("{}", rendered);
+    println!("{rendered}");
     println!("=================================================\n");
 
     // Verify the rendered tree shows actual message content
@@ -478,8 +478,10 @@ async fn test_render_resolved_with_mock_resolver() {
     assert!(rendered.contains("[assistant] 2+2 equals 4."), "Should show assistant message content");
 
     // Also verify the structure is preserved
-    let lines: Vec<&str> = rendered.lines().collect();
-    assert!(lines.len() >= 3, "Should have at least 3 lines (root + 2 messages)");
+    assert!(
+        rendered.lines().count() >= 3,
+        "Should have at least 3 lines (root + 2 messages)"
+    );
 }
 
 // ============================================================================
@@ -496,9 +498,9 @@ async fn test_render_resolved_with_mock_resolver() {
 async fn of_gate_role_is_dynamic_child_with_cone_ids_list() {
     use crate::plexus::{Activation, MethodRole};
 
-    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let (_cone_storage, arbor, dir) = create_test_storage().await;
     let cone = Cone::<crate::plexus::NoParent>::new(
-        ConeStorageConfig { db_path: _dir.path().join("schema_cones.db") },
+        ConeStorageConfig { db_path: dir.path().join("schema_cones.db") },
         arbor,
     ).await.unwrap();
 
@@ -525,9 +527,9 @@ async fn of_gate_role_is_dynamic_child_with_cone_ids_list() {
 async fn get_child_resolves_valid_cone_id() {
     use crate::plexus::ChildRouter;
 
-    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let (_cone_storage, arbor, dir) = create_test_storage().await;
     let cone = Cone::<crate::plexus::NoParent>::new(
-        ConeStorageConfig { db_path: _dir.path().join("resolve_cones.db") },
+        ConeStorageConfig { db_path: dir.path().join("resolve_cones.db") },
         arbor,
     ).await.unwrap();
 
@@ -552,9 +554,9 @@ async fn get_child_resolves_valid_cone_id() {
 async fn get_child_returns_none_for_unknown_id() {
     use crate::plexus::ChildRouter;
 
-    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let (_cone_storage, arbor, dir) = create_test_storage().await;
     let cone = Cone::<crate::plexus::NoParent>::new(
-        ConeStorageConfig { db_path: _dir.path().join("unknown_cones.db") },
+        ConeStorageConfig { db_path: dir.path().join("unknown_cones.db") },
         arbor,
     ).await.unwrap();
 
@@ -576,9 +578,9 @@ async fn cone_child_router_capabilities_include_list() {
     #[allow(deprecated)]
     use crate::plexus::{ChildCapabilities, ChildRouter};
 
-    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let (_cone_storage, arbor, dir) = create_test_storage().await;
     let cone = Cone::<crate::plexus::NoParent>::new(
-        ConeStorageConfig { db_path: _dir.path().join("caps_cones.db") },
+        ConeStorageConfig { db_path: dir.path().join("caps_cones.db") },
         arbor,
     ).await.unwrap();
 
@@ -588,8 +590,7 @@ async fn cone_child_router_capabilities_include_list() {
     let expected = ChildCapabilities::LIST;
     assert!(
         caps.contains(expected),
-        "Cone must advertise LIST capability (list = \"cone_ids\" opt-in); got {:?}",
-        caps
+        "Cone must advertise LIST capability (list = \"cone_ids\" opt-in); got {caps:?}"
     );
 }
 
@@ -599,9 +600,9 @@ async fn list_children_streams_known_cone_ids() {
     use crate::plexus::ChildRouter;
     use futures::StreamExt;
 
-    let (_cone_storage, arbor, _dir) = create_test_storage().await;
+    let (_cone_storage, arbor, dir) = create_test_storage().await;
     let cone = Cone::<crate::plexus::NoParent>::new(
-        ConeStorageConfig { db_path: _dir.path().join("list_cones.db") },
+        ConeStorageConfig { db_path: dir.path().join("list_cones.db") },
         arbor,
     ).await.unwrap();
 
@@ -625,12 +626,10 @@ async fn list_children_streams_known_cone_ids() {
 
     assert!(
         listed.iter().any(|id| id == &a.id.to_string()),
-        "list_children should contain cone a's UUID; got {:?}",
-        listed
+        "list_children should contain cone a's UUID; got {listed:?}"
     );
     assert!(
         listed.iter().any(|id| id == &b.id.to_string()),
-        "list_children should contain cone b's UUID; got {:?}",
-        listed
+        "list_children should contain cone b's UUID; got {listed:?}"
     );
 }

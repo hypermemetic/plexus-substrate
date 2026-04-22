@@ -238,6 +238,10 @@ fn build_graph(sections: Vec<RawSection>) -> Result<CompiledGraph, String> {
     Ok(CompiledGraph { nodes, edges })
 }
 
+// Returns `Result` despite never erroring today so that future validation
+// (e.g. rejecting malformed blocked_by lines) can fail without churning the
+// `.map(parse_section_body).collect::<Result<_, _>>()` call site.
+#[allow(clippy::unnecessary_wraps)]
 fn parse_section_body(section: RawSection) -> Result<ParsedTicket, String> {
     let RawSection { id, type_tag, body_lines } = section;
 
@@ -281,7 +285,7 @@ fn parse_section_body(section: RawSection) -> Result<ParsedTicket, String> {
             continue;
         }
 
-        prose_lines.push(line.to_string());
+        prose_lines.push(line.clone());
     }
 
     // Trim leading/trailing blank lines, preserve internal structure
@@ -289,8 +293,7 @@ fn parse_section_body(section: RawSection) -> Result<ParsedTicket, String> {
     let end = prose_lines
         .iter()
         .rposition(|l| !l.trim().is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
+        .map_or(0, |i| i + 1);
     let body = if start < end { prose_lines[start..end].join("\n") } else { String::new() };
 
     let (task, command) = match type_tag.as_str() {
@@ -299,6 +302,12 @@ fn parse_section_body(section: RawSection) -> Result<ParsedTicket, String> {
     };
 
     Ok(ParsedTicket { id, type_tag, deps, task, command, validate })
+}
+
+impl PartialEq for OrchaEdgeDef {
+    fn eq(&self, other: &Self) -> bool {
+        self.from == other.from && self.to == other.to
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -476,11 +485,5 @@ blocked_by: [A, B]
             g.edges.iter().map(|e| (e.from.as_str(), e.to.as_str())).collect();
         assert!(edge_pairs.contains(&("A", "C")));
         assert!(edge_pairs.contains(&("B", "C")));
-    }
-}
-
-impl PartialEq for OrchaEdgeDef {
-    fn eq(&self, other: &Self) -> bool {
-        self.from == other.from && self.to == other.to
     }
 }

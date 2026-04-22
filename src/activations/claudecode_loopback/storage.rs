@@ -25,17 +25,17 @@ impl Default for LoopbackStorageConfig {
 
 pub struct LoopbackStorage {
     pool: SqlitePool,
-    /// Maps tool_use_id -> session_id for correlation
-    /// This allows loopback_permit to find the session_id when called via MCP
+    /// Maps `tool_use_id` -> `session_id` for correlation
+    /// This allows `loopback_permit` to find the `session_id` when called via MCP
     tool_session_map: RwLock<HashMap<String, String>>,
-    /// Maps session_id -> Notify for blocking wait on new approvals
-    /// Allows wait_for_approval to block until an approval arrives for that session
+    /// Maps `session_id` -> Notify for blocking wait on new approvals
+    /// Allows `wait_for_approval` to block until an approval arrives for that session
     session_notifiers: Arc<RwLock<HashMap<String, Arc<Notify>>>>,
-    /// Maps child_session_id -> parent_session_id
+    /// Maps `child_session_id` -> `parent_session_id`
     /// When a child session gets an approval, the parent is also notified
     session_parents: RwLock<HashMap<String, String>>,
-    /// Maps parent_session_id -> [child_session_id]
-    /// Allows list_pending to include child session approvals when querying by parent
+    /// Maps `parent_session_id` -> [`child_session_id`]
+    /// Allows `list_pending` to include child session approvals when querying by parent
     session_children: RwLock<HashMap<String, Vec<String>>>,
 }
 
@@ -54,21 +54,21 @@ impl LoopbackStorage {
         Ok(storage)
     }
 
-    /// Register a tool_use_id -> session_id mapping
-    /// Called by the background task when it sees a ToolUse event
+    /// Register a `tool_use_id` -> `session_id` mapping
+    /// Called by the background task when it sees a `ToolUse` event
     pub fn register_tool_session(&self, tool_use_id: &str, session_id: &str) {
         if let Ok(mut map) = self.tool_session_map.write() {
             map.insert(tool_use_id.to_string(), session_id.to_string());
         }
     }
 
-    /// Lookup session_id by tool_use_id
-    /// Called by loopback_permit to find the correct session_id
+    /// Lookup `session_id` by `tool_use_id`
+    /// Called by `loopback_permit` to find the correct `session_id`
     pub fn lookup_session_by_tool(&self, tool_use_id: &str) -> Option<String> {
         self.tool_session_map.read().ok()?.get(tool_use_id).cloned()
     }
 
-    /// Remove a tool_use_id mapping (called after approval is resolved)
+    /// Remove a `tool_use_id` mapping (called after approval is resolved)
     pub fn remove_tool_mapping(&self, tool_use_id: &str) {
         if let Ok(mut map) = self.tool_session_map.write() {
             map.remove(tool_use_id);
@@ -76,7 +76,7 @@ impl LoopbackStorage {
     }
 
     async fn run_migrations(&self) -> Result<(), LoopbackError> {
-        sqlx::query(r#"
+        sqlx::query(r"
             CREATE TABLE IF NOT EXISTS loopback_approvals (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -90,7 +90,7 @@ impl LoopbackStorage {
             );
             CREATE INDEX IF NOT EXISTS idx_loopback_session ON loopback_approvals(session_id);
             CREATE INDEX IF NOT EXISTS idx_loopback_status ON loopback_approvals(status);
-        "#)
+        ")
         .execute(&self.pool)
         .await
         .map_err(|e| LoopbackError::Storage { operation: "migration", detail: e.to_string() })?;
@@ -217,8 +217,7 @@ impl LoopbackStorage {
                 let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                 let query_str = format!(
                     "SELECT id, session_id, tool_name, tool_use_id, input, status, response_message, created_at, resolved_at
-                     FROM loopback_approvals WHERE session_id IN ({}) AND status = 'pending' ORDER BY created_at",
-                    placeholders
+                     FROM loopback_approvals WHERE session_id IN ({placeholders}) AND status = 'pending' ORDER BY created_at"
                 );
                 let mut q = sqlx::query(&query_str);
                 for sid in &session_ids {
@@ -253,7 +252,7 @@ impl LoopbackStorage {
         };
 
         Ok(ApprovalRequest {
-            id: Uuid::parse_str(&id_str).map_err(|e| LoopbackError::InvalidData { detail: format!("Invalid UUID '{}': {}", id_str, e) })?,
+            id: Uuid::parse_str(&id_str).map_err(|e| LoopbackError::InvalidData { detail: format!("Invalid UUID '{id_str}': {e}") })?,
             session_id: row.get("session_id"),
             tool_name: row.get("tool_name"),
             tool_use_id: row.get("tool_use_id"),
@@ -266,7 +265,7 @@ impl LoopbackStorage {
     }
 
     /// Get or create a notifier for a session
-    /// This allows multiple wait_for_approval calls to wait on the same session
+    /// This allows multiple `wait_for_approval` calls to wait on the same session
     pub fn get_or_create_notifier(&self, session_id: &str) -> Arc<Notify> {
         let mut notifiers = self.session_notifiers.write().unwrap();
         notifiers
@@ -277,7 +276,7 @@ impl LoopbackStorage {
 
     /// Register a parent session for a child session.
     /// When the child gets an approval, the parent notifier is also woken.
-    /// Also registers the inverse mapping so list_pending can find child approvals.
+    /// Also registers the inverse mapping so `list_pending` can find child approvals.
     pub fn register_session_parent(&self, child_session_id: &str, parent_session_id: &str) {
         if let Ok(mut map) = self.session_parents.write() {
             map.insert(child_session_id.to_string(), parent_session_id.to_string());
@@ -290,8 +289,8 @@ impl LoopbackStorage {
     }
 
     /// Notify waiters on a session that a new approval has arrived.
-    /// Uses notify_one() so the permit is stored even if no task is currently
-    /// suspended in notified() — preventing lost wakeups when the auto-approver
+    /// Uses `notify_one()` so the permit is stored even if no task is currently
+    /// suspended in `notified()` — preventing lost wakeups when the auto-approver
     /// is busy processing a previous batch.
     /// Also notifies the parent session if one is registered.
     fn notify_session(&self, session_id: &str) {

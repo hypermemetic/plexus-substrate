@@ -1,4 +1,4 @@
-pub use crate::types::Handle;
+pub(super) use crate::types::Handle;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ impl ArborId {
     }
 
     /// Create a nil UUID (all zeros)
-    pub fn nil() -> Self {
+    pub const fn nil() -> Self {
         Self(Uuid::nil())
     }
 
@@ -29,17 +29,12 @@ impl ArborId {
     pub fn parse_str(s: &str) -> Result<Self, String> {
         Uuid::from_str(s)
             .map(Self)
-            .map_err(|e| format!("Invalid UUID: {}", e))
+            .map_err(|e| format!("Invalid UUID: {e}"))
     }
 
     /// Get the inner UUID
-    pub fn inner(&self) -> &Uuid {
+    pub const fn inner(&self) -> &Uuid {
         &self.0
-    }
-
-    /// Convert to string
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
     }
 }
 
@@ -126,16 +121,16 @@ pub enum NodeType {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceState {
-    /// Fully accessible and mutable (ref_count >= 1)
+    /// Fully accessible and mutable (`ref_count` >= 1)
     Active,
-    /// Marked for deletion, can be claimed (ref_count = 0)
+    /// Marked for deletion, can be claimed (`ref_count` = 0)
     ScheduledDelete,
     /// Archived, read-only access only
     Archived,
 }
 
 impl ResourceState {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             ResourceState::Active => "active",
             ResourceState::ScheduledDelete => "scheduled_delete",
@@ -143,6 +138,10 @@ impl ResourceState {
         }
     }
 
+    // Named `from_str` by convention; returns `Option<Self>` (not `Result`),
+    // so it intentionally does not implement `std::str::FromStr`. Callers pass
+    // DB column strings where `None` is the expected signal for unknown values.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "active" => Some(ResourceState::Active),
@@ -159,7 +158,7 @@ pub struct ResourceRefs {
     /// Total reference count
     pub ref_count: i64,
 
-    /// Who owns references (owner_id -> count)
+    /// Who owns references (`owner_id` -> count)
     pub owners: HashMap<String, i64>,
 }
 
@@ -211,7 +210,7 @@ pub struct Tree {
     /// Root node ID
     pub root: NodeId,
 
-    /// All nodes in the tree (NodeId -> Node)
+    /// All nodes in the tree (`NodeId` -> Node)
     pub nodes: HashMap<NodeId, Node>,
 
     /// Reference counting state
@@ -310,11 +309,11 @@ impl Tree {
                 // Use resolved content if available, otherwise show handle
                 resolved.get(node_id)
                     .cloned()
-                    .unwrap_or_else(|| format!("[{}]", handle))
+                    .unwrap_or_else(|| format!("[{handle}]"))
             }
         };
 
-        output.push_str(&format!("{}{}{}\n", prefix, connector, content));
+        output.push_str(&format!("{prefix}{connector}{content}\n"));
 
         let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
 
@@ -344,11 +343,11 @@ impl Tree {
                 truncated.replace('\n', "↵")
             }
             NodeType::External { handle } => {
-                format!("[{}]", handle)
+                format!("[{handle}]")
             }
         };
 
-        output.push_str(&format!("{}{}{}\n", prefix, connector, content));
+        output.push_str(&format!("{prefix}{connector}{content}\n"));
 
         // Child prefix
         let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });

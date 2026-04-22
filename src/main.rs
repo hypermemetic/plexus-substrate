@@ -24,7 +24,7 @@ struct Args {
     no_mcp: bool,
 
     /// Bearer token required on all WebSocket and MCP HTTP connections.
-    /// Also read from the PLEXUS_API_KEY environment variable.
+    /// Also read from the `PLEXUS_API_KEY` environment variable.
     /// When neither is provided, no authentication is required.
     #[arg(long, env = "PLEXUS_API_KEY")]
     api_key: Option<String>,
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
     let rpc_converter = |arc| {
         use plexus_core::plexus::DynamicHub;
         DynamicHub::arc_into_rpc_module(arc)
-            .map_err(|e| anyhow::anyhow!("Failed to create RPC module: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to create RPC module: {e}"))
     };
 
     if args.stdio {
@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
             use plexus_core::plexus::DynamicHub;
             let flat_schemas = hub.list_plugin_schemas();
             let module = DynamicHub::arc_into_rpc_module(hub.clone())
-                .map_err(|e| anyhow::anyhow!("Failed to create RPC module: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to create RPC module: {e}"))?;
             let hub_route = hub.clone();
             let route_fn: RouteFn = Arc::new(move |method, params| {
                 let hub = hub_route.clone();

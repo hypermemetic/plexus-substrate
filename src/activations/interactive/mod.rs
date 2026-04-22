@@ -37,7 +37,7 @@
 //!
 //! 1. Server sends logging notification with type="request"
 //! 2. Client receives the request data
-//! 3. Client calls `_plexus_respond` tool with request_id and response
+//! 3. Client calls `_plexus_respond` tool with `request_id` and response
 //! 4. Server continues execution with the response
 
 mod activation;

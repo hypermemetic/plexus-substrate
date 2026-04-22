@@ -79,7 +79,7 @@ macro_rules! activation_db_path_from_module {
     };
 }
 
-/// Initialize a SQLite connection pool with standard options
+/// Initialize a `SQLite` connection pool with standard options
 ///
 /// This helper:
 /// 1. Creates parent directories if they don't exist
@@ -88,7 +88,7 @@ macro_rules! activation_db_path_from_module {
 /// 4. Returns a ready-to-use connection pool
 ///
 /// # Arguments
-/// * `db_path` - Path to the SQLite database file
+/// * `db_path` - Path to the `SQLite` database file
 ///
 /// # Errors
 /// Returns an error if directory creation or database connection fails
@@ -96,14 +96,14 @@ pub async fn init_sqlite_pool(db_path: PathBuf) -> Result<SqlitePool, String> {
     // Ensure parent directory exists
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create database directory: {}", e))?;
+            .map_err(|e| format!("Failed to create database directory: {e}"))?;
     }
 
     // Parse connection options
     let db_url = format!("sqlite://{}", db_path.display());
     let options = db_url
         .parse::<SqliteConnectOptions>()
-        .map_err(|e| format!("Failed to parse DB URL: {}", e))?;
+        .map_err(|e| format!("Failed to parse DB URL: {e}"))?;
 
     // Configure SQLite options
     let options = options
@@ -113,7 +113,7 @@ pub async fn init_sqlite_pool(db_path: PathBuf) -> Result<SqlitePool, String> {
     // Connect to database
     SqlitePool::connect_with(options)
         .await
-        .map_err(|e| format!("Failed to connect to database: {}", e))
+        .map_err(|e| format!("Failed to connect to database: {e}"))
 }
 
 #[cfg(test)]
@@ -167,7 +167,7 @@ mod tests {
             .unwrap()
             .as_nanos();
 
-        let test_db = PathBuf::from(format!("/tmp/test_storage_{}.db", timestamp));
+        let test_db = PathBuf::from(format!("/tmp/test_storage_{timestamp}.db"));
 
         let pool = init_sqlite_pool(test_db.clone()).await;
         assert!(pool.is_ok(), "Failed to initialize SQLite pool");

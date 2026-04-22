@@ -1,7 +1,7 @@
 //! Integration tests for bidirectional communication in Plexus RPC
 //!
 //! These tests verify end-to-end bidirectional flows including:
-//! - Request serialization in PlexusStreamItem::Request
+//! - Request serialization in `PlexusStreamItem::Request`
 //! - Response handling through global registry and direct channels
 //! - Timeout scenarios
 //! - Cancellation handling
@@ -28,7 +28,7 @@ use tokio::time::timeout;
 // Request Serialization Tests
 // =============================================================================
 
-/// Test that PlexusStreamItem::Request is properly serialized with all required fields
+/// Test that `PlexusStreamItem::Request` is properly serialized with all required fields
 #[tokio::test]
 async fn test_request_serialization_format() {
     let (ctx, mut rx) = create_test_standard_channel();
@@ -63,8 +63,7 @@ async fn test_request_serialization_format() {
             // Verify request_id is a valid UUID format
             assert!(
                 request_id.len() == 36,
-                "request_id should be UUID format: {}",
-                request_id
+                "request_id should be UUID format: {request_id}"
             );
 
             // Verify timeout_ms is set
@@ -87,7 +86,7 @@ async fn test_request_serialization_format() {
             assert_eq!(request_data["message"], "Test confirmation?");
             assert_eq!(request_data["default"], true);
         }
-        other => panic!("Expected Request item, got {:?}", other),
+        other => panic!("Expected Request item, got {other:?}"),
     }
 }
 
@@ -202,7 +201,7 @@ async fn test_direct_channel_request_response_flow() {
 
     // Verify result
     let result = handle.await.unwrap();
-    assert_eq!(result.unwrap(), true);
+    assert!(result.unwrap());
 }
 
 /// Test prompt request/response flow
@@ -313,15 +312,13 @@ async fn test_timeout_handling() {
     // Should have timed out
     assert!(
         matches!(result, Err(BidirError::Timeout(100))),
-        "Expected Timeout error, got {:?}",
-        result
+        "Expected Timeout error, got {result:?}"
     );
 
     // Should have taken approximately 100ms
     assert!(
         elapsed >= Duration::from_millis(90) && elapsed < Duration::from_millis(200),
-        "Timeout should take ~100ms, took {:?}",
-        elapsed
+        "Timeout should take ~100ms, took {elapsed:?}"
     );
 }
 
@@ -386,7 +383,7 @@ async fn test_sequential_timeouts_clean_state() {
 // Not Supported Tests
 // =============================================================================
 
-/// Test that non-bidirectional channel returns NotSupported
+/// Test that non-bidirectional channel returns `NotSupported`
 #[tokio::test]
 async fn test_not_supported_error() {
     let (tx, _rx) = mpsc::channel(32);
@@ -400,8 +397,7 @@ async fn test_not_supported_error() {
     let result = channel.confirm("Test?").await;
     assert!(
         matches!(result, Err(BidirError::NotSupported)),
-        "Expected NotSupported, got {:?}",
-        result
+        "Expected NotSupported, got {result:?}"
     );
 
     let result = channel.prompt("Test?").await;
@@ -413,7 +409,7 @@ async fn test_not_supported_error() {
     assert!(matches!(result, Err(BidirError::NotSupported)));
 }
 
-/// Test is_bidirectional() method
+/// Test `is_bidirectional()` method
 #[tokio::test]
 async fn test_is_bidirectional_flag() {
     let (tx1, _rx1) = mpsc::channel(32);
@@ -431,7 +427,7 @@ async fn test_is_bidirectional_flag() {
 // Type Mismatch Tests
 // =============================================================================
 
-/// Test that wrong response type causes TypeMismatch error
+/// Test that wrong response type causes `TypeMismatch` error
 #[tokio::test]
 async fn test_type_mismatch_on_confirm() {
     let (tx, mut rx) = mpsc::channel(32);
@@ -457,12 +453,11 @@ async fn test_type_mismatch_on_confirm() {
     let result = handle.await.unwrap();
     assert!(
         matches!(result, Err(BidirError::TypeMismatch { .. })),
-        "Expected TypeMismatch, got {:?}",
-        result
+        "Expected TypeMismatch, got {result:?}"
     );
 }
 
-/// Test that wrong response type causes TypeMismatch error on prompt
+/// Test that wrong response type causes `TypeMismatch` error on prompt
 #[tokio::test]
 async fn test_type_mismatch_on_prompt() {
     let (tx, mut rx) = mpsc::channel(32);
@@ -493,7 +488,7 @@ async fn test_type_mismatch_on_prompt() {
 // Auto-Respond Channel Tests
 // =============================================================================
 
-/// Test auto_respond_channel with custom response function
+/// Test `auto_respond_channel` with custom response function
 #[tokio::test]
 async fn test_auto_respond_channel_custom() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
@@ -514,8 +509,8 @@ async fn test_auto_respond_channel_custom() {
     });
 
     // Test confirm logic
-    assert_eq!(ctx.confirm("Safe action?").await.unwrap(), true);
-    assert_eq!(ctx.confirm("This is dangerous!").await.unwrap(), false);
+    assert!(ctx.confirm("Safe action?").await.unwrap());
+    assert!(!ctx.confirm("This is dangerous!").await.unwrap());
 
     // Test prompt
     assert_eq!(ctx.prompt("Name?").await.unwrap(), "auto-response");
@@ -529,7 +524,7 @@ async fn test_auto_respond_channel_custom() {
     assert_eq!(selected, vec!["last".to_string()]);
 }
 
-/// Test multiple concurrent requests with auto_respond_channel
+/// Test multiple concurrent requests with `auto_respond_channel`
 #[tokio::test]
 async fn test_concurrent_auto_responses() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
@@ -554,7 +549,7 @@ async fn test_concurrent_auto_responses() {
         ctx3.select("Request 3", vec![SelectOption::new("a", "A")]),
     );
 
-    assert_eq!(r1.unwrap(), true);
+    assert!(r1.unwrap());
     assert_eq!(r2.unwrap(), "Request 2");
     assert_eq!(r3.unwrap(), vec!["selected".to_string()]);
 }
@@ -666,7 +661,7 @@ async fn test_global_registry_request_response() {
 
     // Verify result
     let result = handle.await.unwrap();
-    assert_eq!(result.unwrap(), true);
+    assert!(result.unwrap());
 }
 
 /// Test that unknown request ID returns error
@@ -855,7 +850,7 @@ async fn test_wrong_request_id() {
     }
 }
 
-/// Test channel metadata (provenance, plexus_hash)
+/// Test channel metadata (provenance, `plexus_hash`)
 #[tokio::test]
 async fn test_channel_metadata() {
     let (tx, _rx) = mpsc::channel(32);
@@ -889,7 +884,6 @@ async fn test_receiver_dropped() {
     // Should get a transport error (send failed)
     assert!(
         matches!(result, Err(BidirError::Transport(_))),
-        "Expected Transport error, got {:?}",
-        result
+        "Expected Transport error, got {result:?}"
     );
 }

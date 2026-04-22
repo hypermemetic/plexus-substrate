@@ -21,7 +21,7 @@ impl Default for OrchaStorageConfig {
     }
 }
 
-/// Storage for orcha sessions backed by SQLite
+/// Storage for orcha sessions backed by `SQLite`
 pub struct OrchaStorage {
     pool: SqlitePool,
     /// In-memory cache of active sessions
@@ -48,7 +48,7 @@ impl OrchaStorage {
     async fn init_schema(&self) -> Result<(), String> {
         // Create orcha_sessions table
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS orcha_sessions (
                 session_id TEXT PRIMARY KEY,
                 model TEXT NOT NULL,
@@ -62,11 +62,11 @@ impl OrchaStorage {
                 state_data TEXT,
                 UNIQUE(session_id)
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create orcha_sessions table: {}", e))?;
+        .map_err(|e| format!("Failed to create orcha_sessions table: {e}"))?;
 
         // Migrate orcha_sessions: add agent_mode column if not exists
         // SQLite doesn't have a nice IF NOT EXISTS for ALTER TABLE, so we use PRAGMA
@@ -74,7 +74,7 @@ impl OrchaStorage {
         let rows = sqlx::query("PRAGMA table_info(orcha_sessions)")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get table info: {}", e))?;
+            .map_err(|e| format!("Failed to get table info: {e}"))?;
 
         let column_names: Vec<String> = rows.iter()
             .filter_map(|row| match row.try_get::<String, _>("name") {
@@ -91,7 +91,7 @@ impl OrchaStorage {
             sqlx::query("ALTER TABLE orcha_sessions ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'single'")
                 .execute(&self.pool)
                 .await
-                .map_err(|e| format!("Failed to add agent_mode column: {}", e))?;
+                .map_err(|e| format!("Failed to add agent_mode column: {e}"))?;
         }
 
         let has_primary_agent_id = column_names.iter().any(|name| name == "primary_agent_id");
@@ -99,7 +99,7 @@ impl OrchaStorage {
             sqlx::query("ALTER TABLE orcha_sessions ADD COLUMN primary_agent_id TEXT")
                 .execute(&self.pool)
                 .await
-                .map_err(|e| format!("Failed to add primary_agent_id column: {}", e))?;
+                .map_err(|e| format!("Failed to add primary_agent_id column: {e}"))?;
         }
 
         let has_tree_id = column_names.iter().any(|name| name == "tree_id");
@@ -107,12 +107,12 @@ impl OrchaStorage {
             sqlx::query("ALTER TABLE orcha_sessions ADD COLUMN tree_id TEXT")
                 .execute(&self.pool)
                 .await
-                .map_err(|e| format!("Failed to add tree_id column: {}", e))?;
+                .map_err(|e| format!("Failed to add tree_id column: {e}"))?;
         }
 
         // Create orcha_agents table
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS orcha_agents (
                 agent_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -129,22 +129,22 @@ impl OrchaStorage {
                 FOREIGN KEY (session_id) REFERENCES orcha_sessions(session_id) ON DELETE CASCADE,
                 FOREIGN KEY (parent_agent_id) REFERENCES orcha_agents(agent_id) ON DELETE SET NULL
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create orcha_agents table: {}", e))?;
+        .map_err(|e| format!("Failed to create orcha_agents table: {e}"))?;
 
         // Create indexes for orcha_agents
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_agents_session ON orcha_agents(session_id)")
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to create session index: {}", e))?;
+            .map_err(|e| format!("Failed to create session index: {e}"))?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_agents_state ON orcha_agents(state_type)")
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to create state index: {}", e))?;
+            .map_err(|e| format!("Failed to create state index: {e}"))?;
 
         Ok(())
     }
@@ -154,7 +154,7 @@ impl OrchaStorage {
         let rows = sqlx::query("SELECT * FROM orcha_sessions")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| format!("Failed to load sessions: {}", e))?;
+            .map_err(|e| format!("Failed to load sessions: {e}"))?;
 
         let mut sessions = self.sessions.write().await;
 
@@ -171,7 +171,7 @@ impl OrchaStorage {
             // Try to get new fields, default if not present (for backward compat)
             let agent_mode_str: Option<String> = row.try_get("agent_mode").ok();
             let agent_mode = agent_mode_str
-                .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
+                .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
                 .unwrap_or(super::types::AgentMode::Single);
 
             let primary_agent_id: Option<String> = row.try_get("primary_agent_id").ok().flatten();
@@ -231,26 +231,26 @@ impl OrchaStorage {
 
         // Insert into database
         sqlx::query(
-            r#"
+            r"
             INSERT INTO orcha_sessions (
                 session_id, model, working_directory, rules, max_retries,
                 retry_count, created_at, last_activity, state_type, state_data,
                 agent_mode, primary_agent_id, tree_id
             ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'idle', NULL, ?, NULL, ?)
-            "#,
+            ",
         )
         .bind(&session_id)
         .bind(&model)
         .bind(&working_directory)
         .bind(&rules)
-        .bind(max_retries as i64)
+        .bind(i64::from(max_retries))
         .bind(now)
         .bind(now)
         .bind(agent_mode_str)
         .bind(&tree_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create session: {}", e))?;
+        .map_err(|e| format!("Failed to create session: {e}"))?;
 
         // Add to cache
         self.sessions.write().await.insert(session_id.clone(), info.clone());
@@ -264,7 +264,7 @@ impl OrchaStorage {
         sessions
             .get(session_id)
             .cloned()
-            .ok_or_else(|| format!("Session not found: {}", session_id))
+            .ok_or_else(|| format!("Session not found: {session_id}"))
     }
 
     /// Update session state
@@ -277,11 +277,11 @@ impl OrchaStorage {
         let (state_type, state_data) = self.serialize_state(&state);
 
         sqlx::query(
-            r#"
+            r"
             UPDATE orcha_sessions
             SET state_type = ?, state_data = ?, last_activity = ?
             WHERE session_id = ?
-            "#,
+            ",
         )
         .bind(&state_type)
         .bind(&state_data)
@@ -289,7 +289,7 @@ impl OrchaStorage {
         .bind(session_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to update state: {}", e))?;
+        .map_err(|e| format!("Failed to update state: {e}"))?;
 
         // Update cache
         if let Some(info) = self.sessions.write().await.get_mut(session_id) {
@@ -303,23 +303,23 @@ impl OrchaStorage {
     /// Increment retry count
     pub async fn increment_retry(&self, session_id: &SessionId) -> Result<u32, String> {
         sqlx::query(
-            r#"
+            r"
             UPDATE orcha_sessions
             SET retry_count = retry_count + 1
             WHERE session_id = ?
-            "#,
+            ",
         )
         .bind(session_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to increment retry count: {}", e))?;
+        .map_err(|e| format!("Failed to increment retry count: {e}"))?;
 
         // Update cache and return new count
         if let Some(info) = self.sessions.write().await.get_mut(session_id) {
             info.retry_count += 1;
             Ok(info.retry_count)
         } else {
-            Err(format!("Session not found: {}", session_id))
+            Err(format!("Session not found: {session_id}"))
         }
     }
 
@@ -334,7 +334,7 @@ impl OrchaStorage {
             .bind(session_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to delete session: {}", e))?;
+            .map_err(|e| format!("Failed to delete session: {e}"))?;
 
         self.sessions.write().await.remove(session_id);
 
@@ -358,25 +358,25 @@ impl OrchaStorage {
         let now = chrono::Utc::now().timestamp();
 
         sqlx::query(
-            r#"
+            r"
             INSERT INTO orcha_agents (
                 agent_id, session_id, claudecode_session_id, subtask,
                 state_type, state_data, is_primary, parent_agent_id,
                 created_at, last_activity
             ) VALUES (?, ?, ?, ?, 'idle', NULL, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(&agent_id)
         .bind(session_id)
         .bind(&claudecode_session_id)
         .bind(&subtask)
-        .bind(if is_primary { 1 } else { 0 })
+        .bind(i32::from(is_primary))
         .bind(&parent_agent_id)
         .bind(now)
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create agent: {}", e))?;
+        .map_err(|e| format!("Failed to create agent: {e}"))?;
 
         Ok(super::types::AgentInfo {
             agent_id,
@@ -399,8 +399,8 @@ impl OrchaStorage {
             .bind(agent_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| format!("Failed to fetch agent: {}", e))?
-            .ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+            .map_err(|e| format!("Failed to fetch agent: {e}"))?
+            .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
 
         self.row_to_agent(row)
     }
@@ -413,7 +413,7 @@ impl OrchaStorage {
         .bind(session_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list agents: {}", e))?;
+        .map_err(|e| format!("Failed to list agents: {e}"))?;
 
         rows.into_iter()
             .map(|row| self.row_to_agent(row))
@@ -443,11 +443,11 @@ impl OrchaStorage {
 
         if completed_at.is_some() {
             sqlx::query(
-                r#"
+                r"
                 UPDATE orcha_agents
                 SET state_type = ?, state_data = ?, last_activity = ?, completed_at = ?, error_message = ?
                 WHERE agent_id = ?
-                "#,
+                ",
             )
             .bind(&state_type)
             .bind(&state_data)
@@ -457,14 +457,14 @@ impl OrchaStorage {
             .bind(agent_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to update agent state: {}", e))?;
+            .map_err(|e| format!("Failed to update agent state: {e}"))?;
         } else {
             sqlx::query(
-                r#"
+                r"
                 UPDATE orcha_agents
                 SET state_type = ?, state_data = ?, last_activity = ?
                 WHERE agent_id = ?
-                "#,
+                ",
             )
             .bind(&state_type)
             .bind(&state_data)
@@ -472,7 +472,7 @@ impl OrchaStorage {
             .bind(agent_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to update agent state: {}", e))?;
+            .map_err(|e| format!("Failed to update agent state: {e}"))?;
         }
 
         Ok(())
@@ -481,18 +481,18 @@ impl OrchaStorage {
     /// Get session agent counts (active, completed, failed)
     pub async fn get_agent_counts(&self, session_id: &SessionId) -> Result<(u32, u32, u32), String> {
         let row = sqlx::query(
-            r#"
+            r"
             SELECT
                 COUNT(CASE WHEN state_type IN ('idle', 'running', 'waiting_approval', 'validating') THEN 1 END) as active,
                 COUNT(CASE WHEN state_type = 'complete' THEN 1 END) as completed,
                 COUNT(CASE WHEN state_type = 'failed' THEN 1 END) as failed
             FROM orcha_agents WHERE session_id = ?
-            "#
+            "
         )
         .bind(session_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get agent counts: {}", e))?;
+        .map_err(|e| format!("Failed to get agent counts: {e}"))?;
 
         let active: i64 = row.get("active");
         let completed: i64 = row.get("completed");
@@ -501,7 +501,7 @@ impl OrchaStorage {
         Ok((active as u32, completed as u32, failed as u32))
     }
 
-    /// Helper: Convert row to AgentInfo
+    /// Helper: Convert row to `AgentInfo`
     fn row_to_agent(&self, row: sqlx::sqlite::SqliteRow) -> Result<super::types::AgentInfo, String> {
         let state_type: String = row.get("state_type");
         let state_data: Option<String> = row.get("state_data");
@@ -552,21 +552,21 @@ impl OrchaStorage {
             "idle" => Ok(super::types::AgentState::Idle),
             "running" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse running state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse running state: {e}"))?;
                 Ok(super::types::AgentState::Running {
                     sequence: data["sequence"].as_u64().unwrap_or(0),
                 })
             }
             "waiting_approval" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse waiting_approval state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse waiting_approval state: {e}"))?;
                 Ok(super::types::AgentState::WaitingApproval {
                     approval_id: data["approval_id"].as_str().unwrap_or("").to_string(),
                 })
             }
             "validating" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse validating state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse validating state: {e}"))?;
                 Ok(super::types::AgentState::Validating {
                     test_command: data["test_command"].as_str().unwrap_or("").to_string(),
                 })
@@ -574,12 +574,12 @@ impl OrchaStorage {
             "complete" => Ok(super::types::AgentState::Complete),
             "failed" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse failed state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse failed state: {e}"))?;
                 Ok(super::types::AgentState::Failed {
                     error: data["error"].as_str().unwrap_or("Unknown error").to_string(),
                 })
             }
-            _ => Err(format!("Unknown agent state type: {}", state_type)),
+            _ => Err(format!("Unknown agent state type: {state_type}")),
         }
     }
 
@@ -627,7 +627,7 @@ impl OrchaStorage {
             "idle" => Ok(SessionState::Idle),
             "running" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse running state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse running state: {e}"))?;
                 Ok(SessionState::Running {
                     stream_id: data["stream_id"].as_str().unwrap_or("").to_string(),
                     sequence: data["sequence"].as_u64().unwrap_or(0),
@@ -638,14 +638,14 @@ impl OrchaStorage {
             }
             "waiting_approval" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse waiting_approval state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse waiting_approval state: {e}"))?;
                 Ok(SessionState::WaitingApproval {
                     approval_id: data["approval_id"].as_str().unwrap_or("").to_string(),
                 })
             }
             "validating" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse validating state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse validating state: {e}"))?;
                 Ok(SessionState::Validating {
                     test_command: data["test_command"].as_str().unwrap_or("").to_string(),
                 })
@@ -653,12 +653,12 @@ impl OrchaStorage {
             "complete" => Ok(SessionState::Complete),
             "failed" => {
                 let data: serde_json::Value = serde_json::from_str(state_data.unwrap_or("{}"))
-                    .map_err(|e| format!("Failed to parse failed state: {}", e))?;
+                    .map_err(|e| format!("Failed to parse failed state: {e}"))?;
                 Ok(SessionState::Failed {
                     error: data["error"].as_str().unwrap_or("Unknown error").to_string(),
                 })
             }
-            _ => Err(format!("Unknown state type: {}", state_type)),
+            _ => Err(format!("Unknown state type: {state_type}")),
         }
     }
 }

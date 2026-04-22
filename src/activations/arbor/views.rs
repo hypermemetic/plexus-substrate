@@ -1,13 +1,13 @@
-/// Arbor View System
-///
-/// Provides the ability to create view trees that reference ranges of nodes
-/// from storage trees without copying data.
-///
-/// Key Concepts:
-/// - Storage Tree: Immutable, granular source of truth
-/// - View Tree: References nodes/ranges via external handles
-/// - Range Handle: External node pointing to [start → end] in another tree
-/// - Resolve Mode: Control whether to expand ranges or show placeholders
+//! Arbor View System
+//!
+//! Provides the ability to create view trees that reference ranges of nodes
+//! from storage trees without copying data.
+//!
+//! Key Concepts:
+//! - Storage Tree: Immutable, granular source of truth
+//! - View Tree: References nodes/ranges via external handles
+//! - Range Handle: External node pointing to [start → end] in another tree
+//! - Resolve Mode: Control whether to expand ranges or show placeholders
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,7 +48,7 @@ impl RangeHandle {
         })
     }
 
-    /// Try to parse metadata as a RangeHandle
+    /// Try to parse metadata as a `RangeHandle`
     pub fn from_metadata(metadata: &Value) -> Option<Self> {
         use super::types::ArborId;
 
@@ -156,10 +156,12 @@ impl ArborStorage {
         parent_node: &NodeId,
         range_spec: RangeSpec,
     ) -> Result<NodeId, ArborError> {
+        use crate::activations::claudecode::NodeEvent;
+
         let range_handle = RangeHandle {
-            tree_id: range_spec.tree_id.clone(),
-            start_node: range_spec.start_node.clone(),
-            end_node: range_spec.end_node.clone(),
+            tree_id: range_spec.tree_id,
+            start_node: range_spec.start_node,
+            end_node: range_spec.end_node,
             collapse_type: range_spec.collapse_type.clone(),
         };
 
@@ -172,7 +174,6 @@ impl ArborStorage {
         ).await?;
 
         // Create appropriate NodeEvent with merged content
-        use crate::activations::claudecode::NodeEvent;
         let merged_content = match range_content {
             RangeContent::Text { content, .. } => {
                 // Wrap merged text in a ContentText NodeEvent
@@ -205,14 +206,14 @@ impl ArborStorage {
     // TREE TRAVERSAL HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Build a map of parent_id -> Vec<child_ids> from the tree's parent pointers
+    /// Build a map of `parent_id` -> Vec<`child_ids`> from the tree's parent pointers
     fn build_child_map(tree: &Tree) -> HashMap<NodeId, Vec<NodeId>> {
         let mut children: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
 
         for (node_id, node) in &tree.nodes {
             if let Some(parent_id) = &node.parent {
                 children.entry(*parent_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(*node_id);
             }
         }
@@ -305,25 +306,25 @@ impl ArborStorage {
                         let node = tree.nodes.get(node_id).unwrap();
                         if node.parent.as_ref() == Some(end) {
                             // Extend the run
-                            *end = node_id.clone();
+                            *end = *node_id;
                             *count += 1;
                             *chars += char_count;
                         } else {
                             // End current run, start new one
                             if *count >= min_length {
                                 runs.push(TextRun {
-                                    start_node: start.clone(),
-                                    end_node: end.clone(),
+                                    start_node: *start,
+                                    end_node: *end,
                                     length: *count,
                                     char_count: *chars,
                                 });
                             }
-                            current_run = Some((node_id.clone(), node_id.clone(), 1, char_count));
+                            current_run = Some((*node_id, *node_id, 1, char_count));
                         }
                     }
                     None => {
                         // Start new run
-                        current_run = Some((node_id.clone(), node_id.clone(), 1, char_count));
+                        current_run = Some((*node_id, *node_id, 1, char_count));
                     }
                 }
             } else {
@@ -485,7 +486,7 @@ impl ArborStorage {
 
         // Get path from start to end
         let mut path_nodes = Vec::new();
-        let mut current = end_node.clone();
+        let mut current = *end_node;
 
         // Walk up from end to start (or root)
         while current != *start_node {
@@ -501,12 +502,12 @@ impl ArborStorage {
                 current = *parent;
             } else {
                 return Err(ArborError::InvalidState {
-                    message: format!("end_node {} is not a descendant of start_node {} in tree {}", end_node, start_node, tree_id),
+                    message: format!("end_node {end_node} is not a descendant of start_node {start_node} in tree {tree_id}"),
                 });
             }
         }
 
-        path_nodes.push(start_node.clone());
+        path_nodes.push(*start_node);
         path_nodes.reverse();
 
         match collapse_type {
@@ -543,9 +544,9 @@ impl ArborStorage {
             }
             CollapseType::StructureRef => {
                 Ok(RangeContent::Reference {
-                    tree_id: tree_id.clone(),
-                    start_node: start_node.clone(),
-                    end_node: end_node.clone(),
+                    tree_id: *tree_id,
+                    start_node: *start_node,
+                    end_node: *end_node,
                     node_count: path_nodes.len(),
                 })
             }

@@ -1,5 +1,10 @@
+use std::io::Write;
+
 use plexus_substrate::activations::arbor::{ArborConfig, ArborStorage};
 use plexus_substrate::activations::claudecode::sessions;
+use plexus_substrate::activations::claudecode::{
+    AssistantMessage, ContentBlock, NodeEvent, SessionEvent,
+};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -57,7 +62,6 @@ async fn test_session_import_export_roundtrip() {
     let session_path = sessions::get_session_path(project_str, session_id);
     std::fs::create_dir_all(session_path.parent().unwrap()).unwrap();
     let mut session_file = std::fs::File::create(&session_path).unwrap();
-    use std::io::Write;
     for event in &test_events {
         writeln!(session_file, "{}", serde_json::to_string(event).unwrap()).unwrap();
     }
@@ -70,7 +74,7 @@ async fn test_session_import_export_roundtrip() {
     let tree_id = sessions::import_to_arbor(&storage, project_str, session_id, "test-user")
         .await
         .unwrap();
-    println!("✓ Imported to tree: {}\n", tree_id);
+    println!("✓ Imported to tree: {tree_id}\n");
 
     // 3. Check tree structure
     let tree = storage.tree_get(&tree_id).await.unwrap();
@@ -91,7 +95,7 @@ async fn test_session_import_export_roundtrip() {
     sessions::export_from_arbor(&storage, &tree_id, project_str, export_session_id)
         .await
         .unwrap();
-    println!("✓ Exported to session: {}\n", export_session_id);
+    println!("✓ Exported to session: {export_session_id}\n");
 
     // 5. Read exported session
     println!("5. Reading exported session...");
@@ -112,17 +116,16 @@ async fn test_session_import_export_roundtrip() {
     );
 
     // Check event types match
-    use plexus_substrate::activations::claudecode::SessionEvent;
     for (i, event) in exported_events.iter().enumerate() {
         match (i, event) {
             (0, SessionEvent::User { .. }) => {
-                println!("  ✓ Event {}: User message", i);
+                println!("  ✓ Event {i}: User message");
             }
             (1, SessionEvent::Assistant { .. }) => {
-                println!("  ✓ Event {}: Assistant message", i);
+                println!("  ✓ Event {i}: Assistant message");
             }
             _ => {
-                panic!("Unexpected event at index {}: {:?}", i, event);
+                panic!("Unexpected event at index {i}: {event:?}");
             }
         }
     }
@@ -150,7 +153,6 @@ async fn test_view_collapse_export() {
     let tree = storage.tree_get(&tree_id).await.unwrap();
 
     // Add consecutive NodeEvent text nodes
-    use plexus_substrate::activations::claudecode::NodeEvent;
     let texts = vec!["Hello ", "from ", "Claude ", "Code!"];
 
     let mut parent = tree.root;
@@ -193,7 +195,7 @@ async fn test_view_collapse_export() {
         .await
         .unwrap();
 
-    println!("✓ Created view tree: {}", view_tree_id);
+    println!("✓ Created view tree: {view_tree_id}");
     println!("✓ Collapsed {} text run(s)\n", collapsed_runs.len());
 
     // DEBUG: Check view tree structure
@@ -217,14 +219,14 @@ async fn test_view_collapse_export() {
     match sessions::export_from_arbor(&storage, &view_tree_id, project_str, session_id).await {
         Ok(()) => println!("✓ Exported view to session\n"),
         Err(e) => {
-            eprintln!("ERROR exporting: {}", e);
-            panic!("Export failed: {}", e);
+            eprintln!("ERROR exporting: {e}");
+            panic!("Export failed: {e}");
         }
     }
 
     // Check if file was created
     let session_path = sessions::get_session_path(project_str, session_id);
-    println!("Session file should be at: {:?}", session_path);
+    println!("Session file should be at: {session_path:?}");
     println!("File exists: {}", session_path.exists());
 
     // 4. Read exported session and verify merged content
@@ -232,22 +234,18 @@ async fn test_view_collapse_export() {
     let exported_events = match sessions::read_session(project_str, session_id).await {
         Ok(events) => events,
         Err(e) => {
-            eprintln!("ERROR reading session: {}", e);
-            panic!("Failed to read exported session: {}", e);
+            eprintln!("ERROR reading session: {e}");
+            panic!("Failed to read exported session: {e}");
         }
     };
 
     println!("  Exported events: {}", exported_events.len());
 
     // Should have 1 assistant message with merged content
-    use plexus_substrate::activations::claudecode::{
-        AssistantMessage, ContentBlock, SessionEvent,
-    };
-
     for (i, event) in exported_events.iter().enumerate() {
         match event {
             SessionEvent::Assistant { data } => {
-                println!("  ✓ Event {}: Assistant message", i);
+                println!("  ✓ Event {i}: Assistant message");
 
                 match &data.message {
                     AssistantMessage::Full { content, .. } => {
@@ -256,17 +254,17 @@ async fn test_view_collapse_export() {
                         // Check if we have merged text
                         for (j, block) in content.iter().enumerate() {
                             if let ContentBlock::Text { text } = block {
-                                println!("    Block {}: \"{}\"", j, text);
+                                println!("    Block {j}: \"{text}\"");
                             }
                         }
                     }
                     AssistantMessage::Simple(s) => {
-                        println!("    Simple message: {}", s);
+                        println!("    Simple message: {s}");
                     }
                 }
             }
             other => {
-                println!("  Event {}: {:?}", i, other);
+                println!("  Event {i}: {other:?}");
             }
         }
     }

@@ -9,7 +9,7 @@ use futures::StreamExt;
 use rmcp::{
     ErrorData as McpError,
     ServerHandler,
-    model::*,
+    model::{Tool, ServerInfo, ProtocolVersion, ServerCapabilities, Implementation, PaginatedRequestParam, ListToolsResult, CallToolRequestParam, CallToolResult, ProgressNotificationParam, LoggingMessageNotificationParam, LoggingLevel, Content},
     service::{RequestContext, RoleServer},
 };
 use serde_json::json;
@@ -39,19 +39,22 @@ fn schemas_to_rmcp_tools(schemas: Vec<PluginSchema>) -> Vec<Tool> {
                     .params
                     .and_then(|s| serde_json::to_value(s).ok())
                     .and_then(|v| v.as_object().cloned())
-                    .map(|mut obj| {
-                        // MCP requires "type": "object" at schema root
-                        if !obj.contains_key("type") {
-                            obj.insert("type".to_string(), json!("object"));
-                        }
-                        Arc::new(obj)
-                    })
-                    .unwrap_or_else(|| {
-                        // Empty params = empty object schema
-                        Arc::new(serde_json::Map::from_iter([
-                            ("type".to_string(), json!("object")),
-                        ]))
-                    });
+                    .map_or_else(
+                        || {
+                            // Empty params = empty object schema
+                            Arc::new(serde_json::Map::from_iter([(
+                                "type".to_string(),
+                                json!("object"),
+                            )]))
+                        },
+                        |mut obj| {
+                            // MCP requires "type": "object" at schema root
+                            if !obj.contains_key("type") {
+                                obj.insert("type".to_string(), json!("object"));
+                            }
+                            Arc::new(obj)
+                        },
+                    );
 
                 Tool::new(name, description, input_schema)
             })
@@ -63,25 +66,25 @@ fn schemas_to_rmcp_tools(schemas: Vec<PluginSchema>) -> Vec<Tool> {
 // Error Mapping
 // =============================================================================
 
-/// Convert PlexusError to McpError
+/// Convert `PlexusError` to `McpError`
 fn plexus_to_mcp_error(e: PlexusError) -> McpError {
     match e {
         PlexusError::ActivationNotFound(name) => {
-            McpError::invalid_params(format!("Unknown activation: {}", name), None)
+            McpError::invalid_params(format!("Unknown activation: {name}"), None)
         }
         PlexusError::MethodNotFound { activation, method } => {
-            McpError::invalid_params(format!("Unknown method: {}.{}", activation, method), None)
+            McpError::invalid_params(format!("Unknown method: {activation}.{method}"), None)
         }
         PlexusError::InvalidParams(reason) => McpError::invalid_params(reason, None),
         PlexusError::ExecutionError(error) => McpError::internal_error(error, None),
         PlexusError::HandleNotSupported(activation) => {
-            McpError::invalid_params(format!("Handle resolution not supported: {}", activation), None)
+            McpError::invalid_params(format!("Handle resolution not supported: {activation}"), None)
         }
         PlexusError::TransportError(kind) => {
-            McpError::internal_error(format!("Transport error: {:?}", kind), None)
+            McpError::internal_error(format!("Transport error: {kind:?}"), None)
         }
         PlexusError::Unauthenticated(reason) => {
-            McpError::invalid_params(format!("Unauthenticated: {}", reason), None)
+            McpError::invalid_params(format!("Unauthenticated: {reason}"), None)
         }
     }
 }
@@ -97,7 +100,7 @@ pub struct PlexusMcpBridge {
 }
 
 impl PlexusMcpBridge {
-    pub fn new(hub: Arc<DynamicHub>) -> Self {
+    pub const fn new(hub: Arc<DynamicHub>) -> Self {
         Self { hub }
     }
 }
@@ -151,7 +154,7 @@ impl ServerHandler for PlexusMcpBridge {
         let progress_token = ctx.meta.get_progress_token();
 
         // Logger name: plexus.namespace.method (e.g., plexus.bash.execute)
-        let logger = format!("plexus.{}", method_name);
+        let logger = format!("plexus.{method_name}");
 
         // Call Plexus RPC hub and get stream
         let stream = self
@@ -184,7 +187,7 @@ impl ServerHandler for PlexusMcpBridge {
                             .peer
                             .notify_progress(ProgressNotificationParam {
                                 progress_token: token.clone(),
-                                progress: percentage.unwrap_or(0.0) as f64,
+                                progress: f64::from(percentage.unwrap_or(0.0)),
                                 total: None,
                                 message: Some(message.clone()),
                             })
@@ -285,7 +288,7 @@ impl ServerHandler for PlexusMcpBridge {
                 }
             } else {
                 // Multiple values - join strings or return as JSON array
-                let all_strings = buffered_data.iter().all(|v| v.is_string());
+                let all_strings = buffered_data.iter().all(serde_json::Value::is_string);
                 if all_strings {
                     buffered_data
                         .iter()

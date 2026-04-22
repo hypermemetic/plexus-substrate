@@ -17,7 +17,7 @@ async fn test_view_collapse_text_runs() {
     // 1. Create test tree
     println!("1. Creating test tree...");
     let tree_id = storage.tree_create(None, "test-user").await.unwrap();
-    println!("✓ Created tree: {}\n", tree_id);
+    println!("✓ Created tree: {tree_id}\n");
 
     // 2. Add consecutive text nodes (simulating streaming response)
     println!("2. Adding consecutive text nodes...");
@@ -84,7 +84,7 @@ async fn test_view_collapse_text_runs() {
         .view_collapse_text_runs(&tree_id, 3, "test-user")
         .await
         .unwrap();
-    println!("✓ Created view tree: {}", view_tree_id);
+    println!("✓ Created view tree: {view_tree_id}");
     println!("✓ Collapsed {} run(s)", collapsed_runs.len());
 
     // 5. Get view tree structure
@@ -114,11 +114,11 @@ async fn test_view_collapse_text_runs() {
             node_count,
             ..
         } => {
-            println!("✓ Merged {} nodes into:", node_count);
-            println!("  \"{}\"", content);
+            println!("✓ Merged {node_count} nodes into:");
+            println!("  \"{content}\"");
             assert_eq!(node_count, texts.len(), "Should merge all text nodes");
 
-            let expected: String = texts.iter().map(|s| *s).collect();
+            let expected: String = texts.iter().copied().collect();
             assert_eq!(content, expected, "Merged content should match original");
         }
         _ => panic!("Expected Text content"),

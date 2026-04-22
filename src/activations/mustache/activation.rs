@@ -22,7 +22,7 @@ impl Mustache {
     pub async fn new(config: MustacheStorageConfig) -> Result<Self, String> {
         let storage = MustacheStorage::new(config)
             .await
-            .map_err(|e| format!("Failed to initialize mustache storage: {}", e))?;
+            .map_err(|e| format!("Failed to initialize mustache storage: {e}"))?;
 
         Ok(Self {
             storage: Arc::new(storage),
@@ -52,13 +52,13 @@ impl Mustache {
     ) -> Result<(), String> {
         // Validate the template compiles
         if let Err(e) = mustache::compile_str(template) {
-            return Err(format!("Invalid template: {}", e));
+            return Err(format!("Invalid template: {e}"));
         }
 
         self.storage
             .set_template(&plugin_id, method, name, template)
             .await
-            .map_err(|e| format!("Failed to register template: {}", e))?;
+            .map_err(|e| format!("Failed to register template: {e}"))?;
 
         Ok(())
     }
@@ -95,7 +95,7 @@ impl Mustache {
     /// Render a value using a template
     ///
     /// Looks up the template for the given plugin/method/name combination
-    /// and renders the value using mustache templating. If template_name
+    /// and renders the value using mustache templating. If `template_name`
     /// is None, uses "default".
     #[plexus_macros::method(description = "Render a value using a registered mustache template",
     params(
@@ -130,21 +130,21 @@ impl Mustache {
                                         }
                                         Err(e) => {
                                             yield MustacheEvent::Error {
-                                                message: format!("UTF-8 conversion error: {}", e),
+                                                message: format!("UTF-8 conversion error: {e}"),
                                             };
                                         }
                                     }
                                 }
                                 Err(e) => {
                                     yield MustacheEvent::Error {
-                                        message: format!("Template render error: {}", e),
+                                        message: format!("Template render error: {e}"),
                                     };
                                 }
                             }
                         }
                         Err(e) => {
                             yield MustacheEvent::Error {
-                                message: format!("Template compile error: {}", e),
+                                message: format!("Template compile error: {e}"),
                             };
                         }
                     }
@@ -152,14 +152,13 @@ impl Mustache {
                 Ok(None) => {
                     yield MustacheEvent::NotFound {
                         message: format!(
-                            "Template not found: plugin={}, method={}, name={}",
-                            plugin_id, method, name
+                            "Template not found: plugin={plugin_id}, method={method}, name={name}"
                         ),
                     };
                 }
                 Err(e) => {
                     yield MustacheEvent::Error {
-                        message: format!("Storage error: {}", e),
+                        message: format!("Storage error: {e}"),
                     };
                 }
             }
@@ -168,7 +167,7 @@ impl Mustache {
 
     /// Register a template for a plugin/method
     ///
-    /// Templates are identified by (plugin_id, method, name). If a template
+    /// Templates are identified by (`plugin_id`, method, name). If a template
     /// with the same identifier already exists, it will be updated.
     #[plexus_macros::method(description = "Register a mustache template for a plugin method",
     params(
@@ -190,7 +189,7 @@ impl Mustache {
             // Validate the template compiles
             if let Err(e) = mustache::compile_str(&template) {
                 yield MustacheEvent::Error {
-                    message: format!("Invalid template: {}", e),
+                    message: format!("Invalid template: {e}"),
                 };
                 return;
             }
@@ -201,7 +200,7 @@ impl Mustache {
                 }
                 Err(e) => {
                     yield MustacheEvent::Error {
-                        message: format!("Failed to register template: {}", e),
+                        message: format!("Failed to register template: {e}"),
                     };
                 }
             }
@@ -224,7 +223,7 @@ impl Mustache {
                 }
                 Err(e) => {
                     yield MustacheEvent::Error {
-                        message: format!("Failed to list templates: {}", e),
+                        message: format!("Failed to list templates: {e}"),
                     };
                 }
             }
@@ -254,14 +253,13 @@ impl Mustache {
                 Ok(None) => {
                     yield MustacheEvent::NotFound {
                         message: format!(
-                            "Template not found: plugin={}, method={}, name={}",
-                            plugin_id, method, name
+                            "Template not found: plugin={plugin_id}, method={method}, name={name}"
                         ),
                     };
                 }
                 Err(e) => {
                     yield MustacheEvent::Error {
-                        message: format!("Failed to get template: {}", e),
+                        message: format!("Failed to get template: {e}"),
                     };
                 }
             }
@@ -287,12 +285,12 @@ impl Mustache {
             match storage.delete_template(&plugin_id, &method, &name).await {
                 Ok(deleted) => {
                     yield MustacheEvent::Deleted {
-                        count: if deleted { 1 } else { 0 },
+                        count: usize::from(deleted),
                     };
                 }
                 Err(e) => {
                     yield MustacheEvent::Error {
-                        message: format!("Failed to delete template: {}", e),
+                        message: format!("Failed to delete template: {e}"),
                     };
                 }
             }

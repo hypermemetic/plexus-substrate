@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// A changelog entry documenting a plexus hash transition
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ChangelogEntry {
-    /// The plexus_hash this entry documents
+    /// The `plexus_hash` this entry documents
     pub hash: String,
 
     /// The previous hash this transitioned from (None for initial entry)

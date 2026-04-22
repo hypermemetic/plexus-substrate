@@ -1,4 +1,4 @@
-use super::types::*;
+use super::types::{ListRunningResult, RunningNode, InjectResult, ListProcessesResult, ProcessInfo, KillProcessResult, GraphSnapshotResult, NodeSnapshot};
 use crate::activations::lattice::{LatticeStorage, NodeStatus};
 use async_stream::stream;
 use futures::Stream;
@@ -18,7 +18,7 @@ pub struct Chaos {
 }
 
 impl Chaos {
-    pub fn new(lattice: Arc<LatticeStorage>) -> Self {
+    pub const fn new(lattice: Arc<LatticeStorage>) -> Self {
         Self { lattice }
     }
 }
@@ -27,7 +27,7 @@ impl Chaos {
 fn spec_type(spec_json: &str) -> String {
     serde_json::from_str::<serde_json::Value>(spec_json)
         .ok()
-        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()))
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(std::string::ToString::to_string))
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -39,7 +39,7 @@ fn find_pids_by_cmdline(pattern: &str) -> Vec<(u32, String)> {
         let name = entry.file_name();
         let pid_str = name.to_string_lossy();
         let Ok(pid) = pid_str.parse::<u32>() else { continue };
-        let cmdline_path = format!("/proc/{}/cmdline", pid);
+        let cmdline_path = format!("/proc/{pid}/cmdline");
         let Ok(raw) = std::fs::read(&cmdline_path) else { continue };
         // cmdline is NUL-separated
         let cmdline = raw.iter().map(|&b| if b == 0 { b' ' } else { b }).collect::<Vec<_>>();
@@ -89,7 +89,7 @@ impl Chaos {
         }
     }
 
-    /// Force-fail a specific node. Calls advance_graph with an error token,
+    /// Force-fail a specific node. Calls `advance_graph` with an error token,
     /// triggering downstream failure propagation and retry logic.
     #[plexus_macros::method(description = "Inject a failure into a running node",
     params(
@@ -123,7 +123,7 @@ impl Chaos {
                 Ok(()) => yield InjectResult::Ok {
                     graph_id,
                     node_id,
-                    action: format!("failed: {}", error_msg),
+                    action: format!("failed: {error_msg}"),
                 },
                 Err(e) => yield InjectResult::Err { message: e },
             }
@@ -205,12 +205,16 @@ impl Chaos {
     ) -> impl Stream<Item = KillProcessResult> + Send + 'static {
         stream! {
             // Verify process exists first
-            let cmdline_path = format!("/proc/{}/cmdline", pid);
+            let cmdline_path = format!("/proc/{pid}/cmdline");
             if !std::path::Path::new(&cmdline_path).exists() {
                 yield KillProcessResult::NotFound;
                 return;
             }
 
+            // SAFETY: libc::kill is a POSIX syscall with no safe wrapper in std.
+            // pid fits in i32 (process IDs on supported platforms are <= i32::MAX);
+            // SIGKILL is a const defined by libc. Neither dereferences user memory.
+            #[allow(unsafe_code)]
             let result = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
             if result == 0 {
                 yield KillProcessResult::Killed { pid };
@@ -219,7 +223,7 @@ impl Chaos {
                 if errno.raw_os_error() == Some(libc::ESRCH) {
                     yield KillProcessResult::NotFound;
                 } else {
-                    yield KillProcessResult::Err { message: format!("kill failed: {}", errno) };
+                    yield KillProcessResult::Err { message: format!("kill failed: {errno}") };
                 }
             }
         }
@@ -289,7 +293,13 @@ impl Chaos {
             };
             // Small delay so the response can be flushed
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            unsafe { libc::kill(std::process::id() as i32, libc::SIGKILL) };
+            // SAFETY: libc::kill is a POSIX syscall with no safe wrapper in std.
+            // std::process::id() returns a valid pid; SIGKILL is a const defined
+            // by libc. Neither dereferences user memory.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::kill(std::process::id() as i32, libc::SIGKILL)
+            };
         }
     }
 }

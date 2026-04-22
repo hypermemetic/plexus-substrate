@@ -1,5 +1,5 @@
 use super::storage::{LatticeStorage, LatticeStorageConfig};
-use super::types::*;
+use super::types::{CreateResult, GraphId, NodeSpec, NodeId, AddNodeResult, EdgeCondition, AddEdgeResult, LatticeEventEnvelope, NodeOutput, NodeUpdateResult, GetNodeInputsResult, GetGraphResult, ListGraphsResult, CancelResult, GraphStatus, CreateChildGraphResult, GetChildGraphsResult};
 use async_stream::stream;
 use futures::Stream;
 use serde_json::Value;
@@ -52,8 +52,8 @@ impl Lattice {
 
     /// Add a node to the graph
     ///
-    /// spec carries the typed node execution semantics (Task, Scatter, Gather, SubGraph).
-    /// node_id is optional — a UUID is generated if not provided.
+    /// spec carries the typed node execution semantics (Task, Scatter, Gather, `SubGraph`).
+    /// `node_id` is optional — a UUID is generated if not provided.
     #[plexus_macros::method(params(
         graph_id = "ID of the graph to add the node to",
         spec = "Node specification: typed enum (task/scatter/gather/subgraph)",
@@ -74,7 +74,7 @@ impl Lattice {
         }
     }
 
-    /// Add a dependency edge: to_node waits for from_node to complete
+    /// Add a dependency edge: `to_node` waits for `from_node` to complete
     ///
     /// condition optionally filters which token colors are routed on this edge.
     /// None (default) passes any token; Some(color) routes only matching-color tokens.
@@ -103,7 +103,7 @@ impl Lattice {
     /// Start execution — long-lived stream of sequenced events.
     ///
     /// **Fresh start** (`after_seq` omitted, graph is Pending):
-    /// Seeds root nodes as Ready, persists NodeReady events, then streams live.
+    /// Seeds root nodes as Ready, persists `NodeReady` events, then streams live.
     ///
     /// **Reconnect** (`after_seq = <last seq received>`):
     /// Replays every event that occurred after that sequence number, then streams live.
@@ -128,7 +128,7 @@ impl Lattice {
     /// Signal that a node finished successfully
     ///
     /// output carries typed token(s) to route to successor nodes.
-    /// Triggers NodeReady for any newly unblocked successors.
+    /// Triggers `NodeReady` for any newly unblocked successors.
     #[plexus_macros::method(params(
         graph_id = "ID of the graph",
         node_id = "ID of the completed node",
@@ -149,7 +149,7 @@ impl Lattice {
         }
     }
 
-    /// Signal that a node failed — triggers GraphFailed
+    /// Signal that a node failed — triggers `GraphFailed`
     #[plexus_macros::method(params(
         graph_id = "ID of the graph",
         node_id = "ID of the failed node",
@@ -173,7 +173,7 @@ impl Lattice {
     /// Get raw input tokens for a node — what arrived on all inbound edges.
     ///
     /// Returns Token { color, payload: Data { value } | Handle | None }.
-    /// Callers that need handle resolution should use Orcha's resolve_node_inputs instead.
+    /// Callers that need handle resolution should use Orcha's `resolve_node_inputs` instead.
     #[plexus_macros::method(params(
         graph_id = "ID of the graph",
         node_id = "ID of the node to inspect inputs for"
@@ -192,7 +192,7 @@ impl Lattice {
             };
             if !nodes.iter().any(|n| n.id == node_id) {
                 yield GetNodeInputsResult::Err {
-                    message: format!("Node {} not found in graph {}", node_id, graph_id),
+                    message: format!("Node {node_id} not found in graph {graph_id}"),
                 };
                 return;
             }
@@ -254,7 +254,7 @@ impl Lattice {
         }
     }
 
-    /// Add a SubGraph node — when dispatched, runs the child graph to completion.
+    /// Add a `SubGraph` node — when dispatched, runs the child graph to completion.
     ///
     /// On child success, the parent node receives `{"child_graph_id": "..."}` as output.
     /// On child failure, the parent node is failed (error edge fires if present).

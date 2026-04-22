@@ -36,7 +36,7 @@ impl ChangelogStorage {
     async fn init_schema(&self) -> Result<(), String> {
         // Table for changelog entries
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS changelog_entries (
                 hash TEXT PRIMARY KEY,
                 previous_hash TEXT,
@@ -46,29 +46,29 @@ impl ChangelogStorage {
                 author TEXT,
                 queue_id TEXT
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create changelog_entries table: {}", e))?;
+        .map_err(|e| format!("Failed to create changelog_entries table: {e}"))?;
 
         // Table for tracking the last known hash
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS hash_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_hash TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create hash_state table: {}", e))?;
+        .map_err(|e| format!("Failed to create hash_state table: {e}"))?;
 
         // Table for queue entries (planned changes)
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS queue_entries (
                 id TEXT PRIMARY KEY,
                 description TEXT NOT NULL,
@@ -78,11 +78,11 @@ impl ChangelogStorage {
                 completed_hash TEXT,
                 completed_at INTEGER
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create queue_entries table: {}", e))?;
+        .map_err(|e| format!("Failed to create queue_entries table: {e}"))?;
 
         Ok(())
     }
@@ -90,14 +90,14 @@ impl ChangelogStorage {
     /// Add a new changelog entry
     pub async fn add_entry(&self, entry: &ChangelogEntry) -> Result<(), String> {
         let details_json = serde_json::to_string(&entry.details)
-            .map_err(|e| format!("Failed to serialize details: {}", e))?;
+            .map_err(|e| format!("Failed to serialize details: {e}"))?;
 
         sqlx::query(
-            r#"
+            r"
             INSERT OR REPLACE INTO changelog_entries
             (hash, previous_hash, created_at, summary, details, author, queue_id)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(&entry.hash)
         .bind(&entry.previous_hash)
@@ -108,7 +108,7 @@ impl ChangelogStorage {
         .bind(&entry.queue_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to add changelog entry: {}", e))?;
+        .map_err(|e| format!("Failed to add changelog entry: {e}"))?;
 
         Ok(())
     }
@@ -116,16 +116,16 @@ impl ChangelogStorage {
     /// Get a changelog entry by hash
     pub async fn get_entry(&self, hash: &str) -> Result<Option<ChangelogEntry>, String> {
         let row = sqlx::query(
-            r#"
+            r"
             SELECT hash, previous_hash, created_at, summary, details, author, queue_id
             FROM changelog_entries
             WHERE hash = ?
-            "#,
+            ",
         )
         .bind(hash)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get changelog entry: {}", e))?;
+        .map_err(|e| format!("Failed to get changelog entry: {e}"))?;
 
         match row {
             Some(row) => {
@@ -150,15 +150,15 @@ impl ChangelogStorage {
     /// List all changelog entries (newest first)
     pub async fn list_entries(&self) -> Result<Vec<ChangelogEntry>, String> {
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT hash, previous_hash, created_at, summary, details, author, queue_id
             FROM changelog_entries
             ORDER BY created_at DESC
-            "#,
+            ",
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list changelog entries: {}", e))?;
+        .map_err(|e| format!("Failed to list changelog entries: {e}"))?;
 
         let entries = rows
             .into_iter()
@@ -187,7 +187,7 @@ impl ChangelogStorage {
         let row = sqlx::query("SELECT last_hash FROM hash_state WHERE id = 1")
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| format!("Failed to get last hash: {}", e))?;
+            .map_err(|e| format!("Failed to get last hash: {e}"))?;
 
         Ok(row.map(|r| r.get("last_hash")))
     }
@@ -197,16 +197,16 @@ impl ChangelogStorage {
         let now = chrono::Utc::now().timestamp();
 
         sqlx::query(
-            r#"
+            r"
             INSERT OR REPLACE INTO hash_state (id, last_hash, updated_at)
             VALUES (1, ?, ?)
-            "#,
+            ",
         )
         .bind(hash)
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to set last hash: {}", e))?;
+        .map_err(|e| format!("Failed to set last hash: {e}"))?;
 
         Ok(())
     }
@@ -222,18 +222,18 @@ impl ChangelogStorage {
     /// Add a new queue entry (planned change)
     pub async fn add_queue_entry(&self, entry: &QueueEntry) -> Result<(), String> {
         let tags_json = serde_json::to_string(&entry.tags)
-            .map_err(|e| format!("Failed to serialize tags: {}", e))?;
+            .map_err(|e| format!("Failed to serialize tags: {e}"))?;
         let status_str = match entry.status {
             QueueStatus::Pending => "pending",
             QueueStatus::Completed => "completed",
         };
 
         sqlx::query(
-            r#"
+            r"
             INSERT OR REPLACE INTO queue_entries
             (id, description, tags, created_at, status, completed_hash, completed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(&entry.id)
         .bind(&entry.description)
@@ -244,7 +244,7 @@ impl ChangelogStorage {
         .bind(entry.completed_at)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to add queue entry: {}", e))?;
+        .map_err(|e| format!("Failed to add queue entry: {e}"))?;
 
         Ok(())
     }
@@ -252,16 +252,16 @@ impl ChangelogStorage {
     /// Get a queue entry by ID
     pub async fn get_queue_entry(&self, id: &str) -> Result<Option<QueueEntry>, String> {
         let row = sqlx::query(
-            r#"
+            r"
             SELECT id, description, tags, created_at, status, completed_hash, completed_at
             FROM queue_entries
             WHERE id = ?
-            "#,
+            ",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to get queue entry: {}", e))?;
+        .map_err(|e| format!("Failed to get queue entry: {e}"))?;
 
         match row {
             Some(row) => Ok(Some(self.row_to_queue_entry(row)?)),
@@ -272,15 +272,15 @@ impl ChangelogStorage {
     /// List all queue entries, optionally filtered by tag
     pub async fn list_queue_entries(&self, tag: Option<&str>) -> Result<Vec<QueueEntry>, String> {
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT id, description, tags, created_at, status, completed_hash, completed_at
             FROM queue_entries
             ORDER BY created_at DESC
-            "#,
+            ",
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list queue entries: {}", e))?;
+        .map_err(|e| format!("Failed to list queue entries: {e}"))?;
 
         let mut entries = Vec::new();
         for row in rows {
@@ -301,16 +301,16 @@ impl ChangelogStorage {
     /// List pending queue entries, optionally filtered by tag
     pub async fn list_pending_queue_entries(&self, tag: Option<&str>) -> Result<Vec<QueueEntry>, String> {
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT id, description, tags, created_at, status, completed_hash, completed_at
             FROM queue_entries
             WHERE status = 'pending'
             ORDER BY created_at DESC
-            "#,
+            ",
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list pending queue entries: {}", e))?;
+        .map_err(|e| format!("Failed to list pending queue entries: {e}"))?;
 
         let mut entries = Vec::new();
         for row in rows {
@@ -341,7 +341,10 @@ impl ChangelogStorage {
         }
     }
 
-    /// Helper to convert a row to QueueEntry
+    /// Helper to convert a row to `QueueEntry`
+    // Returns `Result` despite never erroring today so that future column
+    // parsing failures can surface through the existing error channel.
+    #[allow(clippy::unnecessary_wraps)]
     fn row_to_queue_entry(&self, row: sqlx::sqlite::SqliteRow) -> Result<QueueEntry, String> {
         let tags_json: String = row.get("tags");
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();

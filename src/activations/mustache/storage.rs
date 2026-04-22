@@ -1,4 +1,4 @@
-//! Mustache template storage using SQLite
+//! Mustache template storage using `SQLite`
 
 use super::types::{MustacheError, TemplateInfo};
 use crate::activations::storage::init_sqlite_pool;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 /// Configuration for Mustache storage
 #[derive(Debug, Clone)]
 pub struct MustacheStorageConfig {
-    /// Path to SQLite database for templates
+    /// Path to `SQLite` database for templates
     pub db_path: PathBuf,
 }
 
@@ -42,7 +42,7 @@ impl MustacheStorage {
     /// Run database migrations
     async fn run_migrations(&self) -> Result<(), MustacheError> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS templates (
                 id TEXT PRIMARY KEY,
                 plugin_id TEXT NOT NULL,
@@ -56,16 +56,16 @@ impl MustacheStorage {
 
             CREATE INDEX IF NOT EXISTS idx_templates_plugin ON templates(plugin_id);
             CREATE INDEX IF NOT EXISTS idx_templates_lookup ON templates(plugin_id, method, name);
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to run mustache migrations: {}", e))?;
+        .map_err(|e| format!("Failed to run mustache migrations: {e}"))?;
 
         Ok(())
     }
 
-    /// Get a template by plugin_id, method, and name
+    /// Get a template by `plugin_id`, method, and name
     pub async fn get_template(
         &self,
         plugin_id: &Uuid,
@@ -80,7 +80,7 @@ impl MustacheStorage {
         .bind(name)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch template: {}", e))?;
+        .map_err(|e| format!("Failed to fetch template: {e}"))?;
 
         Ok(row.map(|r| r.get("template")))
     }
@@ -104,7 +104,7 @@ impl MustacheStorage {
         .bind(name)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to check existing template: {}", e))?;
+        .map_err(|e| format!("Failed to check existing template: {e}"))?;
 
         let (id, created_at) = if let Some(row) = existing {
             let id: String = row.get("id");
@@ -119,7 +119,7 @@ impl MustacheStorage {
             .bind(&id)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to update template: {}", e))?;
+            .map_err(|e| format!("Failed to update template: {e}"))?;
 
             (id, created_at)
         } else {
@@ -139,7 +139,7 @@ impl MustacheStorage {
             .bind(now)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to insert template: {}", e))?;
+            .map_err(|e| format!("Failed to insert template: {e}"))?;
 
             (id, now)
         };
@@ -163,7 +163,7 @@ impl MustacheStorage {
         .bind(plugin_id.to_string())
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list templates: {}", e))?;
+        .map_err(|e| format!("Failed to list templates: {e}"))?;
 
         let templates: Result<Vec<TemplateInfo>, MustacheError> = rows
             .iter()
@@ -172,7 +172,7 @@ impl MustacheStorage {
                 Ok(TemplateInfo {
                     id: row.get("id"),
                     plugin_id: Uuid::parse_str(&plugin_id_str)
-                        .map_err(|e| format!("Invalid plugin ID: {}", e))?,
+                        .map_err(|e| format!("Invalid plugin ID: {e}"))?,
                     method: row.get("method"),
                     name: row.get("name"),
                     created_at: row.get("created_at"),
@@ -199,7 +199,7 @@ impl MustacheStorage {
         .bind(name)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to delete template: {}", e))?;
+        .map_err(|e| format!("Failed to delete template: {e}"))?;
 
         Ok(result.rows_affected() > 0)
     }

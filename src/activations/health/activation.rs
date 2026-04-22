@@ -21,7 +21,7 @@ pub trait HealthRpc {
 /// Health activation - minimal reference implementation
 ///
 /// This activation demonstrates the caller-wraps architecture.
-/// The `check_stream` method returns typed domain events (HealthEvent),
+/// The `check_stream` method returns typed domain events (`HealthEvent`),
 /// and the `call` method wraps them using `wrap_stream`.
 #[derive(Clone)]
 pub struct Health {
@@ -33,7 +33,7 @@ impl Health {
     pub const NAMESPACE: &'static str = "health";
     /// Version of the health plugin
     pub const VERSION: &'static str = "1.0.0";
-    /// Stable plugin instance ID for handle routing (same formula as hub_methods macro)
+    /// Stable plugin instance ID for handle routing (same formula as `hub_methods` macro)
     /// Generated from "health@1" (namespace + major version)
     pub const PLUGIN_ID: uuid::Uuid = uuid::uuid!("dc560257-b7c5-575b-b893-b448c87ca797");
 
@@ -103,11 +103,11 @@ impl HealthRpcServer for Health {
 impl Activation for Health {
     type Methods = HealthMethod;
 
-    fn namespace(&self) -> &str {
+    fn namespace(&self) -> &'static str {
         "health"
     }
 
-    fn version(&self) -> &str {
+    fn version(&self) -> &'static str {
         "1.0.0"
     }
 
@@ -115,7 +115,7 @@ impl Activation for Health {
         Self::PLUGIN_ID
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Check hub health and uptime"
     }
 
@@ -126,7 +126,7 @@ impl Activation for Health {
     fn method_help(&self, method: &str) -> Option<String> {
         match method {
             "schema" => Some("Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.".to_string()),
-            _ => HealthMethod::description(method).map(|s| s.to_string()),
+            _ => HealthMethod::description(method).map(std::string::ToString::to_string),
         }
     }
 
@@ -141,7 +141,7 @@ impl Activation for Health {
             // Check if a specific method was requested
             let method_name: Option<String> = params.get("method")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
     
             let plugin_schema = self.plugin_schema();
     
@@ -225,7 +225,7 @@ impl Activation for Health {
 
 #[async_trait]
 impl plexus_core::plexus::ChildRouter for Health {
-    fn router_namespace(&self) -> &str {
+    fn router_namespace(&self) -> &'static str {
         "health"
     }
 

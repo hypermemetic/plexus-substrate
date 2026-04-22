@@ -8,16 +8,16 @@ use uuid::Uuid;
 
 use super::activation::ClaudeCode;
 
-/// Unique identifier for a ClaudeCode session
+/// Unique identifier for a `ClaudeCode` session
 pub type ClaudeCodeId = Uuid;
 
 // ============================================================================
 // Handle types for ClaudeCode activation
 // ============================================================================
 
-/// Type-safe handles for ClaudeCode activation data
+/// Type-safe handles for `ClaudeCode` activation data
 ///
-/// Handles reference data stored in the ClaudeCode database and can be embedded
+/// Handles reference data stored in the `ClaudeCode` database and can be embedded
 /// in Arbor tree nodes for external resolution.
 #[derive(Debug, Clone, HandleEnum)]
 #[handle(
@@ -64,10 +64,10 @@ pub enum ClaudeCodeHandle {
 // Handle resolution result types
 // ============================================================================
 
-/// Result of resolving a ClaudeCode handle
+/// Result of resolving a `ClaudeCode` handle
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type")]
-pub enum ResolveResult {
+pub(super) enum ResolveResult {
     /// Successfully resolved message
     #[serde(rename = "resolved_message")]
     Message {
@@ -98,7 +98,7 @@ pub enum MessageRole {
 }
 
 impl MessageRole {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
@@ -106,6 +106,10 @@ impl MessageRole {
         }
     }
 
+    // Returns `Option<Self>` (not `Result`), so intentionally does not
+    // implement `std::str::FromStr`. Callers pass DB column strings where
+    // `None` is the expected signal for unknown values.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "user" => Some(MessageRole::User),
@@ -126,7 +130,7 @@ pub enum Model {
 }
 
 impl Model {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Model::Opus => "opus",
             Model::Sonnet => "sonnet",
@@ -134,6 +138,10 @@ impl Model {
         }
     }
 
+    // Returns `Option<Self>` (not `Result`), so intentionally does not
+    // implement `std::str::FromStr`. Callers pass DB column strings where
+    // `None` is the expected signal for unknown values.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "opus" => Some(Model::Opus),
@@ -144,7 +152,7 @@ impl Model {
     }
 }
 
-/// A position in the context tree - couples tree_id and node_id together.
+/// A position in the context tree - couples `tree_id` and `node_id` together.
 /// Same structure as Cone's Position for consistency.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct Position {
@@ -156,12 +164,12 @@ pub struct Position {
 
 impl Position {
     /// Create a new position
-    pub fn new(tree_id: TreeId, node_id: NodeId) -> Self {
+    pub const fn new(tree_id: TreeId, node_id: NodeId) -> Self {
         Self { tree_id, node_id }
     }
 
     /// Advance to a new node in the same tree
-    pub fn advance(&self, new_node_id: NodeId) -> Self {
+    pub const fn advance(&self, new_node_id: NodeId) -> Self {
         Self {
             tree_id: self.tree_id,
             node_id: new_node_id,
@@ -186,7 +194,7 @@ pub struct Message {
     pub cost_usd: Option<f64>,
 }
 
-/// ClaudeCode session configuration
+/// `ClaudeCode` session configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ClaudeCodeConfig {
     /// Unique identifier for this session
@@ -219,12 +227,12 @@ pub struct ClaudeCodeConfig {
 
 impl ClaudeCodeConfig {
     /// Get the tree ID (convenience accessor)
-    pub fn tree_id(&self) -> TreeId {
+    pub const fn tree_id(&self) -> TreeId {
         self.head.tree_id
     }
 
     /// Get the current node ID (convenience accessor)
-    pub fn node_id(&self) -> NodeId {
+    pub const fn node_id(&self) -> NodeId {
         self.head.node_id
     }
 }
@@ -339,6 +347,9 @@ pub enum CreateResult {
 /// Result of getting a session
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// Boxing `ClaudeCodeConfig` here would change the public Rust API; the enum
+// is JSON-serialized on the wire and size asymmetry in memory is acceptable.
+#[allow(clippy::large_enum_variant)]
 pub enum GetResult {
     #[serde(rename = "ok")]
     Ok { config: ClaudeCodeConfig },
@@ -484,7 +495,7 @@ pub enum ChatEvent {
     Err { message: String },
 }
 
-/// Typed errors for ClaudeCode operations
+/// Typed errors for `ClaudeCode` operations
 #[derive(Debug, Error)]
 pub enum ClaudeCodeError {
     #[error("failed to resolve working directory '{path}': {source}")]
@@ -577,7 +588,7 @@ pub enum RawClaudeEvent {
     Stderr { text: String },
 }
 
-/// Inner event types for stream_event
+/// Inner event types for `stream_event`
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum StreamEventInner {
@@ -703,11 +714,11 @@ pub enum NodeEvent {
     #[serde(rename = "assistant_start")]
     AssistantStart,
 
-    /// Text content block (child of assistant_start)
+    /// Text content block (child of `assistant_start`)
     #[serde(rename = "content_text")]
     ContentText { text: String },
 
-    /// Tool use block (child of assistant_start)
+    /// Tool use block (child of `assistant_start`)
     #[serde(rename = "content_tool_use")]
     ContentToolUse {
         id: String,
@@ -715,7 +726,7 @@ pub enum NodeEvent {
         input: Value,
     },
 
-    /// Thinking block (child of assistant_start)
+    /// Thinking block (child of `assistant_start`)
     #[serde(rename = "content_thinking")]
     ContentThinking { thinking: String },
 
@@ -741,7 +752,7 @@ pub enum NodeEvent {
 }
 
 /// Claude API message format - what we render arbor nodes into
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ClaudeMessage {
     /// Role: "user" or "assistant"
     pub role: String,
@@ -750,7 +761,7 @@ pub struct ClaudeMessage {
 }
 
 /// Content blocks within a Claude message
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Text content
@@ -778,20 +789,20 @@ pub enum ContentBlock {
     Thinking { thinking: String },
 }
 
-/// Result of render_context method
+/// Result of `render_context` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum RenderResult {
+pub(super) enum RenderResult {
     #[serde(rename = "ok")]
     Ok { messages: Vec<ClaudeMessage> },
     #[serde(rename = "error")]
     Err { message: String },
 }
 
-/// Result of get_tree method
+/// Result of `get_tree` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum GetTreeResult {
+pub(super) enum GetTreeResult {
     #[serde(rename = "ok")]
     Ok { tree_id: TreeId, head: NodeId },
     #[serde(rename = "error")]
@@ -802,7 +813,7 @@ pub enum GetTreeResult {
 // SESSION FILE CRUD RESULTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Result of sessions_list method
+/// Result of `sessions_list` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionsListResult {
@@ -812,7 +823,7 @@ pub enum SessionsListResult {
     Err { message: String },
 }
 
-/// Result of sessions_get method
+/// Result of `sessions_get` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionsGetResult {
@@ -826,7 +837,7 @@ pub enum SessionsGetResult {
     Err { message: String },
 }
 
-/// Result of sessions_import method
+/// Result of `sessions_import` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionsImportResult {
@@ -836,7 +847,7 @@ pub enum SessionsImportResult {
     Err { message: String },
 }
 
-/// Result of sessions_export method
+/// Result of `sessions_export` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionsExportResult {
@@ -846,7 +857,7 @@ pub enum SessionsExportResult {
     Err { message: String },
 }
 
-/// Result of sessions_delete method
+/// Result of `sessions_delete` method
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionsDeleteResult {

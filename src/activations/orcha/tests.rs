@@ -294,7 +294,7 @@ async fn test_create_agent() {
     assert_eq!(agent.session_id, session_id);
     assert_eq!(agent.claudecode_session_id, cc_session_id);
     assert_eq!(agent.subtask, subtask);
-    assert_eq!(agent.is_primary, true);
+    assert!(agent.is_primary);
     assert!(agent.parent_agent_id.is_none());
     assert!(matches!(agent.state, AgentState::Idle));
 
@@ -326,8 +326,8 @@ async fn test_create_multiple_agents() {
         .expect("Failed to create agent 2");
 
     // Verify both agents exist
-    assert_eq!(agent1.is_primary, true);
-    assert_eq!(agent2.is_primary, false);
+    assert!(agent1.is_primary);
+    assert!(!agent2.is_primary);
     assert_eq!(agent2.parent_agent_id, Some(agent1.agent_id.clone()));
 }
 
@@ -348,12 +348,12 @@ async fn test_list_agents() {
             .create_agent(
                 &session_id,
                 format!("cc-{}-{}", i, uuid::Uuid::new_v4()),
-                format!("Task {}", i),
+                format!("Task {i}"),
                 is_primary,
                 None,
             )
             .await
-            .expect(&format!("Failed to create agent {}", i));
+            .unwrap_or_else(|_| panic!("Failed to create agent {i}"));
     }
 
     // List agents
@@ -365,8 +365,8 @@ async fn test_list_agents() {
     assert_eq!(agents.len(), 3);
 
     // Verify primary agent is only the first one
-    let primary_agents: Vec<_> = agents.iter().filter(|a| a.is_primary).collect();
-    assert_eq!(primary_agents.len(), 1);
+    let primary_count = agents.iter().filter(|a| a.is_primary).count();
+    assert_eq!(primary_count, 1);
 }
 
 #[tokio::test]
@@ -604,7 +604,7 @@ fn test_agent_state_serialization() {
 
 #[test]
 fn test_agent_mode_default() {
-    let mode: AgentMode = Default::default();
+    let mode = AgentMode::default();
     assert_eq!(mode, AgentMode::Single);
 }
 
@@ -674,7 +674,7 @@ async fn test_concurrent_agent_creation() {
         let storage_clone = storage.clone();
         let session_id_clone = session_id.clone();
         let handle = tokio::spawn(async move {
-            let subtask = format!("Task {}", i);
+            let subtask = format!("Task {i}");
             let cc_session_id = format!("cc-{}-{}", i, uuid::Uuid::new_v4());
             storage_clone
                 .create_agent(&session_id_clone, cc_session_id, subtask, i == 0, None)
@@ -725,7 +725,7 @@ async fn test_concurrent_state_updates() {
         let session_id_clone = session_id.clone();
         let handle = tokio::spawn(async move {
             let state = SessionState::Running {
-                stream_id: format!("stream-{}", i),
+                stream_id: format!("stream-{i}"),
                 sequence: i as u64,
                 active_agents: 0,
                 completed_agents: 0,

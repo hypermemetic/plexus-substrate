@@ -22,7 +22,7 @@ pub struct GraphRuntime {
 }
 
 impl GraphRuntime {
-    pub fn new(storage: Arc<LatticeStorage>) -> Self {
+    pub const fn new(storage: Arc<LatticeStorage>) -> Self {
         Self { storage }
     }
 
@@ -77,23 +77,23 @@ impl GraphRuntime {
                 OrchaNodeSpec::Review { prompt } => graph.add_review(prompt).await,
                 OrchaNodeSpec::Plan { task } => graph.add_plan(task).await,
             };
-            let lattice_id = result.map_err(|e| format!("Failed to add node '{}': {}", id, e))?;
+            let lattice_id = result.map_err(|e| format!("Failed to add node '{id}': {e}"))?;
             id_map.insert(id, lattice_id);
         }
 
         for OrchaEdgeDef { from, to } in edges {
             let dep_id = id_map
                 .get(&from)
-                .ok_or_else(|| format!("Unknown node id in edge.from: '{}'", from))?
+                .ok_or_else(|| format!("Unknown node id in edge.from: '{from}'"))?
                 .clone();
             let node_id = id_map
                 .get(&to)
-                .ok_or_else(|| format!("Unknown node id in edge.to: '{}'", to))?
+                .ok_or_else(|| format!("Unknown node id in edge.to: '{to}'"))?
                 .clone();
             graph
                 .depends_on(&node_id, &dep_id)
                 .await
-                .map_err(|e| format!("Failed to add edge {} → {}: {}", from, to, e))?;
+                .map_err(|e| format!("Failed to add edge {from} → {to}: {e}"))?;
         }
 
         Ok((graph_id, id_map))
@@ -137,7 +137,7 @@ impl OrchaGraph {
 
     /// Add a synthesize node.
     ///
-    /// Like task, but graph_runner prepends resolved input tokens as `<prior_work>` context.
+    /// Like task, but `graph_runner` prepends resolved input tokens as `<prior_work>` context.
     pub async fn add_synthesize(&self, task: impl Into<String>, max_retries: Option<u8>) -> Result<String, String> {
         let kind = OrchaNodeKind::Synthesize { task: task.into(), max_retries };
         self.add_spec(NodeSpec::Task {
@@ -158,7 +158,7 @@ impl OrchaGraph {
     ) -> Result<String, String> {
         let kind = OrchaNodeKind::Validate {
             command: command.into(),
-            cwd: cwd.map(|d| d.into()),
+            cwd: cwd.map(std::convert::Into::into),
             max_retries,
         };
         self.add_spec(NodeSpec::Task {
@@ -173,12 +173,12 @@ impl OrchaGraph {
         self.add_spec(NodeSpec::Gather { strategy }).await
     }
 
-    /// Add a SubGraph node — when ready, runs the child graph to completion.
+    /// Add a `SubGraph` node — when ready, runs the child graph to completion.
     pub async fn add_subgraph(&self, child_graph_id: impl Into<String>) -> Result<String, String> {
         self.add_spec(NodeSpec::SubGraph { graph_id: child_graph_id.into() }).await
     }
 
-    /// Open a sibling graph by ID sharing the same LatticeStorage.
+    /// Open a sibling graph by ID sharing the same `LatticeStorage`.
     pub fn open_child_graph(&self, graph_id: impl Into<String>) -> OrchaGraph {
         OrchaGraph { graph_id: graph_id.into(), storage: self.storage.clone() }
     }
@@ -290,7 +290,7 @@ impl OrchaGraph {
     }
 
     /// Get the IDs of nodes that have already reached a terminal state (Complete or Failed).
-    /// Used by run_graph_execution to pre-populate the dispatched set on reconnect.
+    /// Used by `run_graph_execution` to pre-populate the dispatched set on reconnect.
     pub async fn get_terminal_node_ids(&self) -> Result<Vec<String>, String> {
         let nodes = self.storage.get_nodes(&self.graph_id).await?;
         Ok(nodes.into_iter()
@@ -307,7 +307,7 @@ impl OrchaGraph {
     /// Get input tokens with Handle payloads resolved to inline Values.
     ///
     /// Lattice resolves handles server-side via Arbor.
-    /// Returns ResolvedToken { color, data: Option<Value> }.
+    /// Returns `ResolvedToken` { color, data: Option<Value> }.
     pub async fn get_resolved_inputs(
         &self,
         node_id: &str,
@@ -340,7 +340,7 @@ impl OrchaGraph {
 
 use crate::activations::arbor::{ArborId, NodeType};
 
-/// Resolve an arbor_tree Handle into a context string.
+/// Resolve an `arbor_tree` Handle into a context string.
 pub(crate) async fn resolve_handle(
     arbor: &ArborStorage,
     handle: &plexus_core::types::Handle,
@@ -357,26 +357,26 @@ pub(crate) async fn resolve_handle(
                 .ok_or("arbor_tree handle missing node_id in meta[1]")?;
 
             let tree_id = ArborId::parse_str(tree_id_str)
-                .map_err(|e| format!("Invalid tree_id in handle meta[0]: {}", e))?;
+                .map_err(|e| format!("Invalid tree_id in handle meta[0]: {e}"))?;
             let node_id = ArborId::parse_str(node_id_str)
-                .map_err(|e| format!("Invalid node_id in handle meta[1]: {}", e))?;
+                .map_err(|e| format!("Invalid node_id in handle meta[1]: {e}"))?;
 
             let path = arbor
                 .context_get_path(&tree_id, &node_id)
                 .await
-                .map_err(|e| format!("Failed to resolve arbor_tree handle: {}", e))?;
+                .map_err(|e| format!("Failed to resolve arbor_tree handle: {e}"))?;
 
             let context = path
                 .iter()
                 .filter_map(|node| match &node.data {
                     NodeType::Text { content } => Some(content.as_str()),
-                    _ => None,
+                    NodeType::External { .. } => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
             Ok(context)
         }
-        other => Err(format!("Unknown handle method: {}", other)),
+        other => Err(format!("Unknown handle method: {other}")),
     }
 }

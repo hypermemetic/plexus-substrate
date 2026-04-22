@@ -30,7 +30,7 @@ impl PmStorage {
 
     async fn init_schema(&self) -> Result<(), String> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS orcha_ticket_maps (
                 graph_id   TEXT NOT NULL,
                 ticket_id  TEXT NOT NULL,
@@ -38,24 +38,24 @@ impl PmStorage {
                 created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 PRIMARY KEY (graph_id, ticket_id)
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create orcha_ticket_maps table: {}", e))?;
+        .map_err(|e| format!("Failed to create orcha_ticket_maps table: {e}"))?;
 
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS orcha_ticket_sources (
                 graph_id   TEXT PRIMARY KEY,
                 source     TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create orcha_ticket_sources table: {}", e))?;
+        .map_err(|e| format!("Failed to create orcha_ticket_sources table: {e}"))?;
 
         // Migrate: add created_at column if it doesn't exist yet (idempotent).
         let _ = sqlx::query(
@@ -69,17 +69,17 @@ impl PmStorage {
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create graph index: {}", e))?;
+        .map_err(|e| format!("Failed to create graph index: {e}"))?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_ticket_maps_node ON orcha_ticket_maps(graph_id, node_id)",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create node index: {}", e))?;
+        .map_err(|e| format!("Failed to create node index: {e}"))?;
 
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS orcha_node_logs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 graph_id   TEXT NOT NULL,
@@ -90,18 +90,18 @@ impl PmStorage {
                 event_data TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create orcha_node_logs table: {}", e))?;
+        .map_err(|e| format!("Failed to create orcha_node_logs table: {e}"))?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_node_logs ON orcha_node_logs(graph_id, node_id, seq)",
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create node logs index: {}", e))?;
+        .map_err(|e| format!("Failed to create node logs index: {e}"))?;
 
         Ok(())
     }
@@ -121,12 +121,12 @@ impl PmStorage {
             .bind(node_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to save ticket map entry: {}", e))?;
+            .map_err(|e| format!("Failed to save ticket map entry: {e}"))?;
         }
         Ok(())
     }
 
-    /// Fetch the ticket_id→node_id map for a graph.
+    /// Fetch the `ticket_id→node_id` map for a graph.
     pub async fn get_ticket_map(&self, graph_id: &str) -> Result<HashMap<String, String>, String> {
         let rows = sqlx::query(
             "SELECT ticket_id, node_id FROM orcha_ticket_maps WHERE graph_id = ?",
@@ -134,7 +134,7 @@ impl PmStorage {
         .bind(graph_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch ticket map: {}", e))?;
+        .map_err(|e| format!("Failed to fetch ticket map: {e}"))?;
 
         let mut map = HashMap::new();
         for row in rows {
@@ -158,7 +158,7 @@ impl PmStorage {
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list ticket maps: {}", e))?;
+        .map_err(|e| format!("Failed to list ticket maps: {e}"))?;
 
         let result = rows
             .into_iter()
@@ -181,7 +181,7 @@ impl PmStorage {
         .bind(source)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to save ticket source: {}", e))?;
+        .map_err(|e| format!("Failed to save ticket source: {e}"))?;
         Ok(())
     }
 
@@ -193,11 +193,11 @@ impl PmStorage {
         .bind(graph_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch ticket source: {}", e))?;
+        .map_err(|e| format!("Failed to fetch ticket source: {e}"))?;
         Ok(row.map(|r| r.get("source")))
     }
 
-    /// Reverse lookup: node_id → ticket_id.
+    /// Reverse lookup: `node_id` → `ticket_id`.
     pub async fn get_ticket_for_node(
         &self,
         graph_id: &str,
@@ -210,14 +210,14 @@ impl PmStorage {
         .bind(node_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch ticket for node: {}", e))?;
+        .map_err(|e| format!("Failed to fetch ticket for node: {e}"))?;
 
         Ok(row.map(|r| r.get("ticket_id")))
     }
 
     /// Append a single log entry for a node execution event.
     ///
-    /// `event_type` is one of: "prompt", "start", "tool_use", "tool_result",
+    /// `event_type` is one of: "prompt", "start", "`tool_use`", "`tool_result`",
     /// "complete", "error", "passthrough", "outcome".
     /// `event_data` is a JSON string.
     pub async fn append_node_log(
@@ -241,11 +241,11 @@ impl PmStorage {
         .bind(event_data)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to append node log: {}", e))?;
+        .map_err(|e| format!("Failed to append node log: {e}"))?;
         Ok(())
     }
 
-    /// Fetch all log entries for a (graph_id, node_id) pair, ordered by seq.
+    /// Fetch all log entries for a (`graph_id`, `node_id`) pair, ordered by seq.
     pub async fn get_node_log(
         &self,
         graph_id: &str,
@@ -261,7 +261,7 @@ impl PmStorage {
         .bind(node_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch node log: {}", e))?;
+        .map_err(|e| format!("Failed to fetch node log: {e}"))?;
 
         let entries = rows
             .into_iter()

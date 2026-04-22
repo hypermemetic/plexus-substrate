@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(help) = plexus.get_method_help(&method) {
                     println!("  {} - {}", method, help.lines().next().unwrap_or(""));
                 } else {
-                    println!("  {}", method);
+                    println!("  {method}");
                 }
             }
             return Ok(());
@@ -68,10 +68,10 @@ async fn main() -> anyhow::Result<()> {
             }
             let method = &args[2];
             if let Some(help) = plexus.get_method_help(method) {
-                println!("Help for {}:\n", method);
-                println!("{}", help);
+                println!("Help for {method}:\n");
+                println!("{help}");
             } else {
-                println!("No help available for method: {}", method);
+                println!("No help available for method: {method}");
             }
             return Ok(());
         }
@@ -86,10 +86,10 @@ async fn main() -> anyhow::Result<()> {
             }
             let namespace = &args[2];
             if let Some(schema) = plexus.get_activation_schema(namespace) {
-                println!("Schema for {}:\n", namespace);
+                println!("Schema for {namespace}:\n");
                 println!("{}", serde_json::to_string_pretty(&schema)?);
             } else {
-                println!("Activation not found: {}", namespace);
+                println!("Activation not found: {namespace}");
             }
             return Ok(());
         }
@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
         json!(null)
     };
 
-    println!("Calling: {} with params: {}", method, params);
+    println!("Calling: {method} with params: {params}");
     println!("---");
 
     // Route to the target activation and stream results

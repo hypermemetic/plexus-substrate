@@ -32,7 +32,7 @@ impl Default for LatticeStorageConfig {
 
 pub struct LatticeStorage {
     pool: SqlitePool,
-    /// Per-graph Notify — wakes the execute() stream when new events are persisted.
+    /// Per-graph Notify — wakes the `execute()` stream when new events are persisted.
     graph_notifiers: Arc<RwLock<HashMap<GraphId, Arc<Notify>>>>,
 }
 
@@ -48,7 +48,7 @@ impl LatticeStorage {
     }
 
     async fn run_migrations(&self) -> Result<(), String> {
-        sqlx::query(r#"
+        sqlx::query(r"
             CREATE TABLE IF NOT EXISTS lattice_graphs (
                 id          TEXT PRIMARY KEY,
                 metadata    TEXT NOT NULL DEFAULT '{}',
@@ -99,10 +99,10 @@ impl LatticeStorage {
             );
             CREATE INDEX IF NOT EXISTS idx_lattice_edge_tokens_graph
                 ON lattice_edge_tokens(graph_id);
-        "#)
+        ")
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Migration failed: {}", e))?;
+        .map_err(|e| format!("Migration failed: {e}"))?;
 
         // Add columns to existing tables (ignore if already exists)
         let _ = sqlx::query("ALTER TABLE lattice_edges ADD COLUMN condition TEXT")
@@ -125,7 +125,7 @@ impl LatticeStorage {
         let id = format!("lattice-{}", Uuid::new_v4());
         let now = current_timestamp();
         let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            .map_err(|e| format!("Failed to serialize metadata: {e}"))?;
 
         sqlx::query(
             "INSERT INTO lattice_graphs (id, metadata, status, created_at) VALUES (?, ?, 'pending', ?)"
@@ -135,7 +135,7 @@ impl LatticeStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create graph: {}", e))?;
+        .map_err(|e| format!("Failed to create graph: {e}"))?;
 
         Ok(id)
     }
@@ -148,7 +148,7 @@ impl LatticeStorage {
         let id = format!("lattice-{}", Uuid::new_v4());
         let now = current_timestamp();
         let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            .map_err(|e| format!("Failed to serialize metadata: {e}"))?;
 
         sqlx::query(
             "INSERT INTO lattice_graphs (id, metadata, status, created_at, parent_graph_id) VALUES (?, ?, 'pending', ?, ?)"
@@ -159,7 +159,7 @@ impl LatticeStorage {
         .bind(parent_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to create child graph: {}", e))?;
+        .map_err(|e| format!("Failed to create child graph: {e}"))?;
 
         Ok(id)
     }
@@ -171,7 +171,7 @@ impl LatticeStorage {
         .bind(parent_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch child graphs: {}", e))?;
+        .map_err(|e| format!("Failed to fetch child graphs: {e}"))?;
 
         let mut graphs = Vec::new();
         for row in rows {
@@ -182,7 +182,7 @@ impl LatticeStorage {
             .bind(&graph_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to count nodes: {}", e))?;
+            .map_err(|e| format!("Failed to count nodes: {e}"))?;
 
             let edge_count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM lattice_edges WHERE graph_id = ?"
@@ -190,7 +190,7 @@ impl LatticeStorage {
             .bind(&graph_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to count edges: {}", e))?;
+            .map_err(|e| format!("Failed to count edges: {e}"))?;
 
             graphs.push(self.row_to_graph(row, node_count as usize, edge_count as usize)?);
         }
@@ -206,7 +206,7 @@ impl LatticeStorage {
         let id = node_id_hint.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = current_timestamp();
         let spec_json = serde_json::to_string(spec)
-            .map_err(|e| format!("Failed to serialize spec: {}", e))?;
+            .map_err(|e| format!("Failed to serialize spec: {e}"))?;
 
         sqlx::query(
             "INSERT INTO lattice_nodes (id, graph_id, spec, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
@@ -217,7 +217,7 @@ impl LatticeStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to add node: {}", e))?;
+        .map_err(|e| format!("Failed to add node: {e}"))?;
 
         if let Ok(graph_status) = self.get_graph_status(graph_id).await {
             if graph_status == GraphStatus::Running {
@@ -242,10 +242,10 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to validate from_node: {}", e))?;
+        .map_err(|e| format!("Failed to validate from_node: {e}"))?;
 
         if !from_exists {
-            return Err(format!("Node {} not found in graph {}", from_node_id, graph_id));
+            return Err(format!("Node {from_node_id} not found in graph {graph_id}"));
         }
 
         let to_exists: bool = sqlx::query_scalar(
@@ -255,15 +255,15 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to validate to_node: {}", e))?;
+        .map_err(|e| format!("Failed to validate to_node: {e}"))?;
 
         if !to_exists {
-            return Err(format!("Node {} not found in graph {}", to_node_id, graph_id));
+            return Err(format!("Node {to_node_id} not found in graph {graph_id}"));
         }
 
         let edge_id = Uuid::new_v4().to_string();
         let condition_json = condition
-            .map(|c| serde_json::to_string(c).map_err(|e| format!("Failed to serialize condition: {}", e)))
+            .map(|c| serde_json::to_string(c).map_err(|e| format!("Failed to serialize condition: {e}")))
             .transpose()?;
 
         sqlx::query(
@@ -276,19 +276,16 @@ impl LatticeStorage {
         .bind(condition_json.as_deref())
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to add edge: {}", e))?;
+        .map_err(|e| format!("Failed to add edge: {e}"))?;
 
         if let Ok(graph_status) = self.get_graph_status(graph_id).await {
             if graph_status == GraphStatus::Running {
                 if let Ok(src_node) = self.get_node(from_node_id).await {
                     if src_node.status == NodeStatus::Complete {
-                        let tokens: Vec<Token> = src_node.output.as_ref()
-                            .map(|o| o.tokens().into_iter().cloned().collect())
-                            .unwrap_or_else(|| vec![Token::ok()]);
+                        let tokens: Vec<Token> = src_node.output.as_ref().map_or_else(|| vec![Token::ok()], |o| o.tokens().into_iter().cloned().collect());
                         for token in &tokens {
                             let matches = condition
-                                .map(|c| c.matches(&token.color))
-                                .unwrap_or(true);
+                                .is_none_or(|c| c.matches(&token.color));
                             if matches {
                                 let seq = self.count_tokens_on_edge(&edge_id).await? + 1;
                                 self.deliver_token(&edge_id, graph_id, token, seq).await?;
@@ -311,8 +308,8 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch graph: {}", e))?
-        .ok_or_else(|| format!("Graph not found: {}", graph_id))?;
+        .map_err(|e| format!("Failed to fetch graph: {e}"))?
+        .ok_or_else(|| format!("Graph not found: {graph_id}"))?;
 
         let node_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM lattice_nodes WHERE graph_id = ?"
@@ -320,7 +317,7 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to count nodes: {}", e))?;
+        .map_err(|e| format!("Failed to count nodes: {e}"))?;
 
         let edge_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM lattice_edges WHERE graph_id = ?"
@@ -328,7 +325,7 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to count edges: {}", e))?;
+        .map_err(|e| format!("Failed to count edges: {e}"))?;
 
         self.row_to_graph(row, node_count as usize, edge_count as usize)
     }
@@ -341,7 +338,7 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to count nodes: {}", e))?;
+        .map_err(|e| format!("Failed to count nodes: {e}"))?;
 
         Ok(count as usize)
     }
@@ -354,7 +351,7 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch nodes: {}", e))?;
+        .map_err(|e| format!("Failed to fetch nodes: {e}"))?;
 
         rows.into_iter().map(|row| self.row_to_node(row)).collect()
     }
@@ -367,8 +364,8 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch node: {}", e))?
-        .ok_or_else(|| format!("Node not found: {}", node_id))?;
+        .map_err(|e| format!("Failed to fetch node: {e}"))?
+        .ok_or_else(|| format!("Node not found: {node_id}"))?;
 
         self.row_to_node(row)
     }
@@ -380,7 +377,7 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch inbound edges: {}", e))?;
+        .map_err(|e| format!("Failed to fetch inbound edges: {e}"))?;
 
         Ok(rows.into_iter().map(|r| r.get::<String, _>("from_node_id")).collect())
     }
@@ -392,12 +389,12 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch outbound edges: {}", e))?;
+        .map_err(|e| format!("Failed to fetch outbound edges: {e}"))?;
 
         Ok(rows.into_iter().map(|r| r.get::<String, _>("to_node_id")).collect())
     }
 
-    /// Returns (edge_id, to_node_id, condition) for each outbound edge.
+    /// Returns (`edge_id`, `to_node_id`, condition) for each outbound edge.
     async fn get_outbound_edges_with_conditions(
         &self,
         node_id: &NodeId,
@@ -408,7 +405,7 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch outbound edges: {}", e))?;
+        .map_err(|e| format!("Failed to fetch outbound edges: {e}"))?;
 
         rows.into_iter()
             .map(|row| {
@@ -419,7 +416,7 @@ impl LatticeStorage {
                     .as_deref()
                     .map(|s| {
                         serde_json::from_str::<EdgeCondition>(s)
-                            .map_err(|e| format!("Failed to deserialize edge condition: {}", e))
+                            .map_err(|e| format!("Failed to deserialize edge condition: {e}"))
                     })
                     .transpose()?;
                 Ok((edge_id, to_node_id, condition))
@@ -446,7 +443,7 @@ impl LatticeStorage {
         .bind(graph_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch root nodes: {}", e))?;
+        .map_err(|e| format!("Failed to fetch root nodes: {e}"))?;
 
         rows.into_iter().map(|row| self.row_to_node(row)).collect()
     }
@@ -464,7 +461,7 @@ impl LatticeStorage {
             _ => None,
         };
         let output_json = output
-            .map(|o| serde_json::to_string(o).map_err(|e| format!("Failed to serialize output: {}", e)))
+            .map(|o| serde_json::to_string(o).map_err(|e| format!("Failed to serialize output: {e}")))
             .transpose()?;
 
         sqlx::query(
@@ -477,7 +474,7 @@ impl LatticeStorage {
         .bind(node_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to update node status: {}", e))?;
+        .map_err(|e| format!("Failed to update node status: {e}"))?;
 
         Ok(())
     }
@@ -492,7 +489,7 @@ impl LatticeStorage {
             .bind(graph_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| format!("Failed to update graph status: {}", e))?;
+            .map_err(|e| format!("Failed to update graph status: {e}"))?;
         Ok(())
     }
 
@@ -502,7 +499,7 @@ impl LatticeStorage {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to list graphs: {}", e))?;
+        .map_err(|e| format!("Failed to list graphs: {e}"))?;
 
         let mut graphs = Vec::new();
         for row in rows {
@@ -513,7 +510,7 @@ impl LatticeStorage {
             .bind(&graph_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to count nodes: {}", e))?;
+            .map_err(|e| format!("Failed to count nodes: {e}"))?;
 
             let edge_count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM lattice_edges WHERE graph_id = ?"
@@ -521,7 +518,7 @@ impl LatticeStorage {
             .bind(&graph_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| format!("Failed to count edges: {}", e))?;
+            .map_err(|e| format!("Failed to count edges: {e}"))?;
 
             graphs.push(self.row_to_graph(row, node_count as usize, edge_count as usize)?);
         }
@@ -538,12 +535,12 @@ impl LatticeStorage {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch running graphs: {}", e))?;
+        .map_err(|e| format!("Failed to fetch running graphs: {e}"))?;
 
         Ok(rows.into_iter().map(|r| r.get::<String, _>("id")).collect())
     }
 
-    /// Reset a single node to 'pending', clearing output/error/completed_at.
+    /// Reset a single node to 'pending', clearing `output/error/completed_at`.
     ///
     /// Used by the startup recovery pass to un-stick nodes that were left in
     /// 'ready' state when the substrate last shut down.
@@ -554,7 +551,7 @@ impl LatticeStorage {
         .bind(node_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to reset node to pending: {}", e))?;
+        .map_err(|e| format!("Failed to reset node to pending: {e}"))?;
         Ok(())
     }
 
@@ -569,7 +566,7 @@ impl LatticeStorage {
         seq: i64,
     ) -> Result<(), String> {
         let token_json = serde_json::to_string(token)
-            .map_err(|e| format!("Failed to serialize token: {}", e))?;
+            .map_err(|e| format!("Failed to serialize token: {e}"))?;
 
         sqlx::query(
             "INSERT INTO lattice_edge_tokens (edge_id, graph_id, token, seq) VALUES (?, ?, ?, ?)"
@@ -580,7 +577,7 @@ impl LatticeStorage {
         .bind(seq)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to deliver token: {}", e))?;
+        .map_err(|e| format!("Failed to deliver token: {e}"))?;
 
         Ok(())
     }
@@ -593,7 +590,7 @@ impl LatticeStorage {
         .bind(edge_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to count edge tokens: {}", e))?;
+        .map_err(|e| format!("Failed to count edge tokens: {e}"))?;
         Ok(count)
     }
 
@@ -608,7 +605,7 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to count inbound edges: {}", e))?;
+        .map_err(|e| format!("Failed to count inbound edges: {e}"))?;
 
         let delivered: i64 = sqlx::query_scalar(
             "SELECT COUNT(DISTINCT edge_id) FROM lattice_edge_tokens
@@ -619,7 +616,7 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| format!("Failed to count delivered edges: {}", e))?;
+        .map_err(|e| format!("Failed to count delivered edges: {e}"))?;
 
         Ok((delivered as usize, total as usize))
     }
@@ -635,13 +632,13 @@ impl LatticeStorage {
         .bind(node_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch node inputs: {}", e))?;
+        .map_err(|e| format!("Failed to fetch node inputs: {e}"))?;
 
         rows.into_iter()
             .map(|row| {
                 let token_json: String = row.get("token");
                 serde_json::from_str::<Token>(&token_json)
-                    .map_err(|e| format!("Failed to deserialize token: {}", e))
+                    .map_err(|e| format!("Failed to deserialize token: {e}"))
             })
             .collect()
     }
@@ -655,7 +652,7 @@ impl LatticeStorage {
         event: &LatticeEvent,
     ) -> Result<u64, String> {
         let event_json = serde_json::to_string(event)
-            .map_err(|e| format!("Failed to serialize event: {}", e))?;
+            .map_err(|e| format!("Failed to serialize event: {e}"))?;
         let now = current_timestamp();
 
         let result = sqlx::query(
@@ -666,12 +663,12 @@ impl LatticeStorage {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to persist event: {}", e))?;
+        .map_err(|e| format!("Failed to persist event: {e}"))?;
 
         Ok(result.last_insert_rowid() as u64)
     }
 
-    /// Read all events for a graph with seq > after_seq, in order.
+    /// Read all events for a graph with seq > `after_seq`, in order.
     pub async fn get_events_after(
         &self,
         graph_id: &GraphId,
@@ -684,20 +681,20 @@ impl LatticeStorage {
         .bind(after_seq as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| format!("Failed to fetch events: {}", e))?;
+        .map_err(|e| format!("Failed to fetch events: {e}"))?;
 
         rows.into_iter()
             .map(|row| {
                 let seq: i64 = row.get("seq");
                 let event_json: String = row.get("event");
                 let event: LatticeEvent = serde_json::from_str(&event_json)
-                    .map_err(|e| format!("Failed to deserialize event: {}", e))?;
+                    .map_err(|e| format!("Failed to deserialize event: {e}"))?;
                 Ok((seq as u64, event))
             })
             .collect()
     }
 
-    /// Wake the execute() stream for a graph.
+    /// Wake the `execute()` stream for a graph.
     pub fn notify_graph(&self, graph_id: &GraphId) {
         if let Ok(notifiers) = self.graph_notifiers.read() {
             if let Some(notifier) = notifiers.get(graph_id) {
@@ -717,7 +714,7 @@ impl LatticeStorage {
     // ─── Graph Lifecycle ─────────────────────────────────────────────────────
 
     /// Atomically transition a Pending graph to Running, seed root nodes as Ready,
-    /// and persist the initial NodeReady events.
+    /// and persist the initial `NodeReady` events.
     ///
     /// Idempotent: if another caller already started the graph, this is a no-op.
     pub async fn start_graph(&self, graph_id: &GraphId) -> Result<(), String> {
@@ -728,7 +725,7 @@ impl LatticeStorage {
         .bind(graph_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| format!("Failed to start graph: {}", e))?;
+        .map_err(|e| format!("Failed to start graph: {e}"))?;
 
         if result.rows_affected() == 0 {
             // Already started by a concurrent caller — that's fine
@@ -744,18 +741,15 @@ impl LatticeStorage {
             }).await?;
         } else {
             for node in root_nodes {
-                match &node.spec {
-                    NodeSpec::Gather { .. } => {
-                        // Root Gather node with no predecessors — skip NodeReady.
-                        // It will stay Pending (degenerate: no tokens will ever arrive).
-                    }
-                    _ => {
-                        self.set_node_status(&node.id, NodeStatus::Ready, None, None).await?;
-                        self.persist_event(graph_id, &LatticeEvent::NodeReady {
-                            node_id: node.id,
-                            spec: node.spec,
-                        }).await?;
-                    }
+                if let NodeSpec::Gather { .. } = &node.spec {
+                    // Root Gather node with no predecessors — skip NodeReady.
+                    // It will stay Pending (degenerate: no tokens will ever arrive).
+                } else {
+                    self.set_node_status(&node.id, NodeStatus::Ready, None, None).await?;
+                    self.persist_event(graph_id, &LatticeEvent::NodeReady {
+                        node_id: node.id,
+                        spec: node.spec,
+                    }).await?;
                 }
             }
         }
@@ -768,7 +762,7 @@ impl LatticeStorage {
     ///
     /// Inbound edge tokens are never deleted, so the node's join condition
     /// is still satisfied and it can be re-dispatched immediately.
-    /// Emits a fresh NodeReady event so the `run_graph_execution` watcher
+    /// Emits a fresh `NodeReady` event so the `run_graph_execution` watcher
     /// picks it up.  Idempotent: no-op if node is not Running.
     pub async fn reset_running_to_ready(
         &self,
@@ -788,11 +782,11 @@ impl LatticeStorage {
         Ok(())
     }
 
-    /// Re-emit NodeReady events for all nodes currently in the 'ready' state.
+    /// Re-emit `NodeReady` events for all nodes currently in the 'ready' state.
     ///
     /// Called during startup recovery after stuck nodes have been reset.
     /// The graph must already be in 'running' status.  This re-seeds the
-    /// execute() stream so that `run_graph_execution` watchers can pick up
+    /// `execute()` stream so that `run_graph_execution` watchers can pick up
     /// and dispatch the pending work.
     pub async fn reemit_ready_nodes(&self, graph_id: &GraphId) -> Result<(), String> {
         let nodes = self.get_nodes(graph_id).await?;
@@ -810,13 +804,13 @@ impl LatticeStorage {
 
     // ─── Transition Logic ────────────────────────────────────────────────────
 
-    /// Called by node_complete / node_failed.
+    /// Called by `node_complete` / `node_failed`.
     ///
     /// Uses an iterative queue to handle Gather auto-execution without async recursion.
     /// Implements the colored token model:
     ///   1. Produce tokens from output/error
     ///   2. Route tokens on outbound edges (filtered by edge condition)
-    ///   3. For each downstream node: check_and_ready (enables Gather auto-execution)
+    ///   3. For each downstream node: `check_and_ready` (enables Gather auto-execution)
     ///   4. Error fallback if no tokens delivered
     ///   5. Check graph completion
     pub async fn advance_graph(
@@ -843,25 +837,22 @@ impl LatticeStorage {
             let failed = err.is_some();
 
             // PRODUCE TOKENS
-            let tokens: Vec<Token>;
-            if failed {
+            let tokens: Vec<Token> = if failed {
                 let err_msg = err.unwrap_or_default();
                 self.set_node_status(&nid, NodeStatus::Failed, None, Some(&err_msg)).await?;
                 self.persist_event(graph_id, &LatticeEvent::NodeFailed {
                     node_id: nid.clone(),
                     error: err_msg.clone(),
                 }).await?;
-                tokens = vec![Token::error(err_msg)];
+                vec![Token::error(err_msg)]
             } else {
                 self.set_node_status(&nid, NodeStatus::Complete, out.as_ref(), None).await?;
                 self.persist_event(graph_id, &LatticeEvent::NodeDone {
                     node_id: nid.clone(),
                     output: out.clone(),
                 }).await?;
-                tokens = out.as_ref()
-                    .map(|o| o.tokens().into_iter().cloned().collect())
-                    .unwrap_or_else(|| vec![Token::ok()]);
-            }
+                out.as_ref().map_or_else(|| vec![Token::ok()], |o| o.tokens().into_iter().cloned().collect())
+            };
 
             // ROUTE TOKENS ON OUTBOUND EDGES
             let outbound = self.get_outbound_edges_with_conditions(&nid).await?;
@@ -870,8 +861,7 @@ impl LatticeStorage {
             for token in &tokens {
                 for (edge_id, to_node_id, condition) in &outbound {
                     let matches = condition.as_ref()
-                        .map(|c| c.matches(&token.color))
-                        .unwrap_or(true);
+                        .is_none_or(|c| c.matches(&token.color));
 
                     if matches {
                         let seq = self.count_tokens_on_edge(edge_id).await? + 1;
@@ -891,7 +881,7 @@ impl LatticeStorage {
                 let err_str = tokens.first()
                     .and_then(|t| match &t.payload {
                         Some(TokenPayload::Data { value }) => {
-                            value.get("message").and_then(|v| v.as_str()).map(|s| s.to_string())
+                            value.get("message").and_then(|v| v.as_str()).map(std::string::ToString::to_string)
                         }
                         _ => None,
                     })
@@ -924,7 +914,7 @@ impl LatticeStorage {
 
     /// Check if a node is enabled (all/any inbound edges delivered tokens).
     /// Returns Some(output) for Gather nodes (caller should queue for processing).
-    /// Returns None for Task/Scatter (sets Ready and persists NodeReady).
+    /// Returns None for Task/Scatter (sets Ready and persists `NodeReady`).
     async fn check_and_ready(
         &self,
         graph_id: &GraphId,
@@ -947,28 +937,25 @@ impl LatticeStorage {
             return Ok(None);
         }
 
-        match &node.spec {
-            NodeSpec::Gather { strategy } => {
-                let tokens = self.get_node_inputs(node_id).await?;
-                let output = match strategy {
-                    GatherStrategy::All => NodeOutput::Many { tokens },
-                    GatherStrategy::First { n } => {
-                        let take = (*n).min(tokens.len());
-                        NodeOutput::Many { tokens: tokens[..take].to_vec() }
-                    }
-                };
-                self.set_node_status(node_id, NodeStatus::Running, None, None).await?;
-                Ok(Some(output))
-            }
-            _ => {
-                // Task / Scatter / SubGraph — emit NodeReady for caller to handle
-                self.set_node_status(node_id, NodeStatus::Ready, None, None).await?;
-                self.persist_event(graph_id, &LatticeEvent::NodeReady {
-                    node_id: node_id.clone(),
-                    spec: node.spec.clone(),
-                }).await?;
-                Ok(None)
-            }
+        if let NodeSpec::Gather { strategy } = &node.spec {
+            let tokens = self.get_node_inputs(node_id).await?;
+            let output = match strategy {
+                GatherStrategy::All => NodeOutput::Many { tokens },
+                GatherStrategy::First { n } => {
+                    let take = (*n).min(tokens.len());
+                    NodeOutput::Many { tokens: tokens[..take].to_vec() }
+                }
+            };
+            self.set_node_status(node_id, NodeStatus::Running, None, None).await?;
+            Ok(Some(output))
+        } else {
+            // Task / Scatter / SubGraph — emit NodeReady for caller to handle
+            self.set_node_status(node_id, NodeStatus::Ready, None, None).await?;
+            self.persist_event(graph_id, &LatticeEvent::NodeReady {
+                node_id: node_id.clone(),
+                spec: node.spec.clone(),
+            }).await?;
+            Ok(None)
         }
     }
 
@@ -1001,8 +988,8 @@ impl LatticeStorage {
                         seq: 0,
                         event: LatticeEvent::GraphFailed {
                             graph_id: graph_id.clone(),
-                            node_id: "".to_string(),
-                            error: format!("Graph not found: {}", e),
+                            node_id: String::new(),
+                            error: format!("Graph not found: {e}"),
                         },
                     };
                     return;
@@ -1015,8 +1002,8 @@ impl LatticeStorage {
                         seq: 0,
                         event: LatticeEvent::GraphFailed {
                             graph_id: graph_id.clone(),
-                            node_id: "".to_string(),
-                            error: format!("Failed to start graph: {}", e),
+                            node_id: String::new(),
+                            error: format!("Failed to start graph: {e}"),
                         },
                     };
                     return;
@@ -1034,8 +1021,8 @@ impl LatticeStorage {
                             seq: cursor,
                             event: LatticeEvent::GraphFailed {
                                 graph_id: graph_id.clone(),
-                                node_id: "".to_string(),
-                                error: format!("Event read error: {}", e),
+                                node_id: String::new(),
+                                error: format!("Event read error: {e}"),
                             },
                         };
                         return;
@@ -1053,7 +1040,7 @@ impl LatticeStorage {
                 }
 
                 tokio::select! {
-                    _ = notifier.notified() => continue,
+                    _ = notifier.notified() => {}
                     _ = tokio::time::sleep(Duration::from_secs(3600)) => {
                         let event = LatticeEvent::GraphFailed {
                             graph_id: graph_id.clone(),
@@ -1071,6 +1058,10 @@ impl LatticeStorage {
 
     // ─── Row Helpers ─────────────────────────────────────────────────────────
 
+    // Returns `Result` despite never erroring today so that future column
+    // parsing failures (e.g. bad metadata JSON) can fail through the call
+    // chain without churning every caller.
+    #[allow(clippy::unnecessary_wraps)]
     fn row_to_graph(
         &self,
         row: sqlx::sqlite::SqliteRow,
@@ -1097,13 +1088,13 @@ impl LatticeStorage {
         let output_json: Option<String> = row.get("output");
 
         let spec: NodeSpec = serde_json::from_str(&spec_json)
-            .map_err(|e| format!("Failed to deserialize spec: {}", e))?;
+            .map_err(|e| format!("Failed to deserialize spec: {e}"))?;
         let status = NodeStatus::from_str(&status_str).unwrap_or(NodeStatus::Pending);
         let output = output_json
             .as_deref()
-            .map(|s| serde_json::from_str::<NodeOutput>(s))
+            .map(serde_json::from_str::<NodeOutput>)
             .transpose()
-            .map_err(|e| format!("Failed to deserialize output: {}", e))?;
+            .map_err(|e| format!("Failed to deserialize output: {e}"))?;
 
         // join_type column may not exist on older databases
         let join_type_str: Option<String> = row.try_get("join_type").ok().flatten();

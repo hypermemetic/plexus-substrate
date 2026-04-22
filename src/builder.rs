@@ -1,4 +1,4 @@
-//! Plexus RPC builder - constructs a fully configured DynamicHub instance
+//! Plexus RPC builder - constructs a fully configured `DynamicHub` instance
 //!
 //! This module is used by both the main binary and examples.
 
@@ -28,17 +28,17 @@ use registry::Registry;
 /// The hub implements the Plexus RPC protocol and provides introspection methods:
 /// - substrate.call: Route calls to registered activations
 /// - substrate.hash: Get configuration hash for cache invalidation
-/// - substrate.list_activations: Enumerate registered activations
+/// - `substrate.list_activations`: Enumerate registered activations
 /// - substrate.schema: Get full Plexus RPC schema
 ///
 /// Hub activations (with nested children) are registered with `register_hub`
 /// to enable direct nested routing like `substrate.solar.mercury.info`.
 ///
 /// This function uses `Arc::new_cyclic` to inject a weak reference to the hub
-/// into Cone and ClaudeCode, enabling them to resolve foreign handles through
+/// into Cone and `ClaudeCode`, enabling them to resolve foreign handles through
 /// the hub without creating reference cycles.
 ///
-/// This function is async because Arbor, Cone, and ClaudeCode require
+/// This function is async because Arbor, Cone, and `ClaudeCode` require
 /// async database initialization.
 pub async fn build_plexus_rpc() -> Arc<DynamicHub> {
     // Initialize Arbor first (other activations depend on its storage)

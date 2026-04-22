@@ -12,14 +12,14 @@ use tokio::sync::Mutex;
 pub struct BashExecutor;
 
 impl BashExecutor {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 
     /// Execute a bash command and stream the output
     ///
     /// This is the core business logic - completely independent of RPC.
-    /// Returns a stream of BashOutput items.
+    /// Returns a stream of `BashOutput` items.
     pub async fn execute(
         &self,
         command: &str,
@@ -48,29 +48,23 @@ impl BashExecutor {
             };
 
             // Get stdout and stderr handles
-            let stdout = match child.stdout.take() {
-                Some(s) => s,
-                None => {
-                    let err = ExecutorError::StdioCaptureFailed {
-                        stream: "stdout",
-                        command: command.clone(),
-                    };
-                    tracing::error!(error = %err, "Bash executor error");
-                    yield BashOutput::Error { message: err.to_string() };
-                    return;
-                }
+            let stdout = if let Some(s) = child.stdout.take() { s } else {
+                let err = ExecutorError::StdioCaptureFailed {
+                    stream: "stdout",
+                    command: command.clone(),
+                };
+                tracing::error!(error = %err, "Bash executor error");
+                yield BashOutput::Error { message: err.to_string() };
+                return;
             };
-            let stderr = match child.stderr.take() {
-                Some(s) => s,
-                None => {
-                    let err = ExecutorError::StdioCaptureFailed {
-                        stream: "stderr",
-                        command: command.clone(),
-                    };
-                    tracing::error!(error = %err, "Bash executor error");
-                    yield BashOutput::Error { message: err.to_string() };
-                    return;
-                }
+            let stderr = if let Some(s) = child.stderr.take() { s } else {
+                let err = ExecutorError::StdioCaptureFailed {
+                    stream: "stderr",
+                    command: command.clone(),
+                };
+                tracing::error!(error = %err, "Bash executor error");
+                yield BashOutput::Error { message: err.to_string() };
+                return;
             };
 
             // Capture stderr in background task to prevent pipe buffer blocking

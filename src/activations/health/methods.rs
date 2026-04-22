@@ -1,6 +1,6 @@
-/// Method definitions for the Health activation using JSON Schema
-///
-/// This provides type-safe method definitions with automatic schema generation.
+//! Method definitions for the Health activation using JSON Schema
+//!
+//! This provides type-safe method definitions with automatic schema generation.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ pub enum HealthMethod {
 
 impl HealthMethod {
     /// Get the method name as a string
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             HealthMethod::Check => "check",
         }

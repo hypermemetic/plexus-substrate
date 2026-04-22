@@ -34,7 +34,7 @@ impl OrchaContext {
                 "orcha",
             )
             .await
-            .map_err(|e| format!("Failed to create arbor tree: {}", e))?;
+            .map_err(|e| format!("Failed to create arbor tree: {e}"))?;
 
         let ctx = Self {
             arbor,
@@ -46,8 +46,7 @@ impl OrchaContext {
         // Write initial session_started node
         ctx.write_node(
             format!(
-                "session_started: {}\ntask: {}\nmodel: {}",
-                session_id, task, model
+                "session_started: {session_id}\ntask: {task}\nmodel: {model}"
             ),
             serde_json::json!({
                 "event": "session_started",
@@ -59,7 +58,7 @@ impl OrchaContext {
         Ok(ctx)
     }
 
-    /// Get the tree_id for this context
+    /// Get the `tree_id` for this context
     pub fn tree_id(&self) -> String {
         self.tree_id.to_string()
     }
@@ -85,8 +84,7 @@ impl OrchaContext {
     pub async fn claude_session_created(&self, claude_session_id: String, session_name: String) {
         self.write_node(
             format!(
-                "claude_session_created: {}\nsession_name: {}",
-                claude_session_id, session_name
+                "claude_session_created: {claude_session_id}\nsession_name: {session_name}"
             ),
             serde_json::json!({
                 "event": "claude_session_started",
@@ -100,7 +98,7 @@ impl OrchaContext {
     /// Record that a prompt was sent to Claude
     pub async fn prompt_created(&self, prompt: String, retry_count: u32) {
         self.write_node(
-            format!("prompt_created (retry {}):\n{}", retry_count, prompt),
+            format!("prompt_created (retry {retry_count}):\n{prompt}"),
             serde_json::json!({
                 "event": "prompt_created",
                 "prompt": prompt,
@@ -113,7 +111,7 @@ impl OrchaContext {
     /// Record that Claude session completed
     pub async fn claude_session_complete(&self, claude_session_id: String) {
         self.write_node(
-            format!("claude_session_complete: {}", claude_session_id),
+            format!("claude_session_complete: {claude_session_id}"),
             serde_json::json!({
                 "event": "claude_session_complete",
                 "claude_session_id": claude_session_id,
@@ -125,7 +123,7 @@ impl OrchaContext {
     /// Record that validation started
     pub async fn validation_started(&self, test_command: String, cwd: String) {
         self.write_node(
-            format!("validation_started:\n{}", test_command),
+            format!("validation_started:\n{test_command}"),
             serde_json::json!({
                 "event": "validation_started",
                 "test_command": test_command,
@@ -168,8 +166,7 @@ impl OrchaContext {
     pub async fn tool_use(&self, tool_name: String, tool_use_id: String, input: String) {
         self.write_node(
             format!(
-                "tool_use: {}\nid: {}\ninput:\n{}",
-                tool_name, tool_use_id, input
+                "tool_use: {tool_name}\nid: {tool_use_id}\ninput:\n{input}"
             ),
             serde_json::json!({
                 "event": "tool_use",
@@ -203,7 +200,7 @@ impl OrchaContext {
     /// Record Claude's text output
     pub async fn claude_output(&self, text: String) {
         self.write_node(
-            format!("claude_output:\n{}", text),
+            format!("claude_output:\n{text}"),
             serde_json::json!({
                 "event": "claude_output",
                 "text": text,

@@ -160,13 +160,13 @@ impl Solar {
     /// warning nudges callers migrating to the role-tagged schema. The body
     /// is unchanged from its pre-IR-8 definition.
     #[deprecated(
-        since = "0.5",
+        since = "0.5.0",
         note = "Solar's children are derivable from #[child]-tagged methods. This override is retained for backward compatibility until plugin_children is removed from the schema."
     )]
     #[plexus_macros::removed_in("0.6")]
     pub fn plugin_children(&self) -> Vec<ChildSummary> {
         self.system.children.iter()
-            .map(|planet| planet.to_child_summary())
+            .map(super::celestial::CelestialBody::to_child_summary)
             .collect()
     }
 }
@@ -307,8 +307,7 @@ mod tests {
         // specific function.
         let block_start = preamble
             .rfind("\n\n")
-            .map(|i| i + 2)
-            .unwrap_or(0);
+            .map_or(0, |i| i + 2);
         let attr_block = &preamble[block_start..];
 
         assert!(
@@ -316,8 +315,8 @@ mod tests {
             "plugin_children must carry #[deprecated(...)] (IR-8 AC #3)"
         );
         assert!(
-            attr_block.contains("since = \"0.5\""),
-            "plugin_children must declare `since = \"0.5\"` (IR-8 AC #3)"
+            attr_block.contains("since = \"0.5.0\""),
+            "plugin_children must declare `since = \"0.5.0\"` (IR-8 AC #3; semver-compliant)"
         );
         assert!(
             attr_block.contains("#[plexus_macros::removed_in(\"0.6\")]"),
@@ -342,7 +341,7 @@ mod tests {
         let solar = Solar::new();
         let schema = solar.plugin_schema();
         let json = serde_json::to_string_pretty(&schema).unwrap();
-        println!("Solar system schema:\n{}", json);
+        println!("Solar system schema:\n{json}");
     }
 
     #[tokio::test]

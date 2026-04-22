@@ -20,7 +20,7 @@ use super::types::{BodyType, SolarEvent};
 
 /// A celestial body in the solar system
 #[derive(Debug, Clone)]
-pub struct CelestialBody {
+pub(super) struct CelestialBody {
     pub name: String,
     pub body_type: BodyType,
     pub mass_kg: f64,
@@ -32,7 +32,7 @@ pub struct CelestialBody {
 
 impl CelestialBody {
     /// Create a new star (root of a system)
-    pub fn star(name: &str, mass_kg: f64, radius_km: f64) -> Self {
+    pub(super) fn star(name: &str, mass_kg: f64, radius_km: f64) -> Self {
         Self {
             name: name.to_string(),
             body_type: BodyType::Star,
@@ -45,7 +45,7 @@ impl CelestialBody {
     }
 
     /// Create a new planet
-    pub fn planet(name: &str, mass_kg: f64, radius_km: f64, orbital_period_days: f64) -> Self {
+    pub(super) fn planet(name: &str, mass_kg: f64, radius_km: f64, orbital_period_days: f64) -> Self {
         Self {
             name: name.to_string(),
             body_type: BodyType::Planet,
@@ -58,7 +58,7 @@ impl CelestialBody {
     }
 
     /// Create a new moon
-    pub fn moon(name: &str, mass_kg: f64, radius_km: f64, orbital_period_days: f64) -> Self {
+    pub(super) fn moon(name: &str, mass_kg: f64, radius_km: f64, orbital_period_days: f64) -> Self {
         Self {
             name: name.to_string(),
             body_type: BodyType::Moon,
@@ -71,14 +71,14 @@ impl CelestialBody {
     }
 
     /// Add a child body (moon to planet, planet to star)
-    pub fn with_child(mut self, mut child: CelestialBody) -> Self {
+    pub(super) fn with_child(mut self, mut child: CelestialBody) -> Self {
         child.parent = Some(self.name.clone());
         self.children.push(child);
         self
     }
 
     /// Add multiple children
-    pub fn with_children(mut self, children: Vec<CelestialBody>) -> Self {
+    pub(super) fn with_children(mut self, children: Vec<CelestialBody>) -> Self {
         for mut child in children {
             child.parent = Some(self.name.clone());
             self.children.push(child);
@@ -87,12 +87,12 @@ impl CelestialBody {
     }
 
     /// Check if this body has children
-    pub fn has_children(&self) -> bool {
+    pub(super) const fn has_children(&self) -> bool {
         !self.children.is_empty()
     }
 
     /// Count all descendants recursively
-    pub fn descendant_count(&self) -> usize {
+    pub(super) fn descendant_count(&self) -> usize {
         self.children.iter()
             .map(|c| 1 + c.descendant_count())
             .sum()
@@ -110,7 +110,7 @@ impl CelestialBody {
     }
 
     /// Convert to a child summary (for parent's schema)
-    pub fn to_child_summary(&self) -> ChildSummary {
+    pub(super) fn to_child_summary(&self) -> ChildSummary {
         let schema = self.to_plugin_schema();
         ChildSummary {
             namespace: schema.namespace,
@@ -119,8 +119,8 @@ impl CelestialBody {
         }
     }
 
-    /// Generate the PluginSchema for this celestial body
-    pub fn to_plugin_schema(&self) -> PluginSchema {
+    /// Generate the `PluginSchema` for this celestial body
+    pub(super) fn to_plugin_schema(&self) -> PluginSchema {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
@@ -144,7 +144,7 @@ impl CelestialBody {
             // Hub: children as summaries
             let child_summaries: Vec<ChildSummary> = self.children
                 .iter()
-                .map(|c| c.to_child_summary())
+                .map(CelestialBody::to_child_summary)
                 .collect();
 
             PluginSchema::hub(namespace, version, description, methods, child_summaries)
@@ -162,7 +162,7 @@ impl CelestialBody {
 /// Method enum for celestial body - just "info"
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "method", rename_all = "snake_case")]
-pub enum CelestialBodyMethod {
+pub(super) enum CelestialBodyMethod {
     Info,
 }
 
@@ -178,19 +178,19 @@ impl MethodEnumSchema for CelestialBodyMethod {
 }
 
 
-/// Activation wrapper for CelestialBody
+/// Activation wrapper for `CelestialBody`
 ///
 /// This makes a celestial body callable as a plugin.
 /// It implements both Activation (for method dispatch) and
-/// ChildRouter (for nested routing to moons).
+/// `ChildRouter` (for nested routing to moons).
 #[derive(Clone)]
-pub struct CelestialBodyActivation {
+pub(super) struct CelestialBodyActivation {
     body: CelestialBody,
     namespace: String,
 }
 
 impl CelestialBodyActivation {
-    pub fn new(body: CelestialBody) -> Self {
+    pub(super) fn new(body: CelestialBody) -> Self {
         let namespace = body.name.to_lowercase().replace(' ', "_");
         Self { body, namespace }
     }
@@ -218,11 +218,11 @@ impl Activation for CelestialBodyActivation {
         &self.namespace
     }
 
-    fn version(&self) -> &str {
+    fn version(&self) -> &'static str {
         "1.0.0"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         // Can't return dynamic string without lifetime issues
         // The schema has the full description
         "Celestial body"
@@ -251,7 +251,7 @@ impl Activation for CelestialBodyActivation {
             // Check if a specific method was requested
             let method_name: Option<String> = params.get("method")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
     
             let plugin_schema = self.plugin_schema();
             let ns = self.namespace.clone();
@@ -335,7 +335,7 @@ impl ChildRouter for CelestialBodyActivation {
 // ============================================================================
 
 /// Build the real solar system with accurate data
-pub fn build_solar_system() -> CelestialBody {
+pub(super) fn build_solar_system() -> CelestialBody {
     CelestialBody::star("Sol", 1.989e30, 696_340.0)
         .with_children(vec![
             // Mercury - no moons
@@ -423,8 +423,15 @@ mod tests {
         let sol = build_solar_system();
         let schema = sol.to_plugin_schema();
 
-        assert!(schema.is_hub());
-        let children = schema.children.as_ref().unwrap();
+        // Using deprecated `is_hub()` + `children` field: Solar's schema is
+        // derived from `plugin_children()` (itself deprecated) which populates
+        // the legacy `children` field. `is_hub_by_role()` reads MethodRole
+        // from the method list and returns false here because the Solar
+        // methods don't carry child-role annotations. Field removal is
+        // tracked in plexus-core 0.7 (see SUB-CLEAN-2 notes).
+        #[allow(deprecated)]
+        let (is_hub, children) = (schema.is_hub(), schema.children.as_ref().unwrap());
+        assert!(is_hub);
         assert_eq!(children.len(), 8); // 8 planets as summaries
 
         // Mercury is in the list

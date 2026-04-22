@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// Configuration for Cone storage
 #[derive(Debug, Clone)]
 pub struct ConeStorageConfig {
-    /// Path to SQLite database for cone configs
+    /// Path to `SQLite` database for cone configs
     pub db_path: PathBuf,
 }
 
@@ -45,7 +45,7 @@ impl ConeStorage {
     /// Run database migrations
     async fn run_migrations(&self) -> Result<(), ConeError> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS cones (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
@@ -73,7 +73,7 @@ impl ConeStorage {
             CREATE INDEX IF NOT EXISTS idx_cones_name ON cones(name);
             CREATE INDEX IF NOT EXISTS idx_cones_tree ON cones(tree_id);
             CREATE INDEX IF NOT EXISTS idx_messages_cone ON messages(cone_id);
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
@@ -107,11 +107,11 @@ impl ConeStorage {
 
         // Create a new tree for this cone
         let tree_id = self.arbor.tree_create(metadata.clone(), &cone_id.to_string()).await
-            .map_err(|e| ConeError::ArborError { detail: format!("Failed to create tree: {}", e) })?;
+            .map_err(|e| ConeError::ArborError { detail: format!("Failed to create tree: {e}") })?;
 
         // Get the root node as initial position
         let tree = self.arbor.tree_get(&tree_id).await
-            .map_err(|e| ConeError::ArborError { detail: format!("Failed to get tree: {}", e) })?;
+            .map_err(|e| ConeError::ArborError { detail: format!("Failed to get tree: {e}") })?;
         let head = Position::new(tree_id, tree.root);
 
         let metadata_json = metadata.as_ref().map(|m| serde_json::to_string(m).unwrap());
@@ -135,7 +135,7 @@ impl ConeStorage {
             Ok(_) => name,  // Success with original name
             Err(e) if e.to_string().contains("UNIQUE constraint failed") => {
                 // Name collision - append #uuid to make it unique
-                let unique_name = format!("{}#{}", name, cone_id);
+                let unique_name = format!("{name}#{cone_id}");
 
                 sqlx::query(
                     "INSERT INTO cones (id, name, model_id, system_prompt, tree_id, canonical_head, metadata, created_at, updated_at)
@@ -171,7 +171,7 @@ impl ConeStorage {
         })
     }
 
-    /// Resolve a cone identifier to a ConeId
+    /// Resolve a cone identifier to a `ConeId`
     ///
     /// For name lookups, supports partial matching on the name portion before '#':
     /// - "assistant" matches "assistant" or "assistant#550e8400-..."
@@ -196,7 +196,7 @@ impl ConeStorage {
 
                 // Try partial match with LIKE pattern
                 // Pattern: "name%" matches "name" or "name#uuid"
-                let pattern = format!("{}%", name);
+                let pattern = format!("{name}%");
                 let rows = sqlx::query("SELECT id, name FROM cones WHERE name LIKE ?")
                     .bind(&pattern)
                     .fetch_all(&self.pool)
@@ -263,8 +263,8 @@ impl ConeStorage {
                 let tree_id_str: String = row.get("tree_id");
                 let head_str: String = row.get("canonical_head");
 
-                let tree_id = TreeId::parse_str(&tree_id_str).map_err(|e| ConeError::StorageError { operation: "parse_tree_id".into(), detail: e.to_string() })?;
-                let node_id = NodeId::parse_str(&head_str).map_err(|e| ConeError::StorageError { operation: "parse_node_id".into(), detail: e.to_string() })?;
+                let tree_id = TreeId::parse_str(&tree_id_str).map_err(|e| ConeError::StorageError { operation: "parse_tree_id".into(), detail: e })?;
+                let node_id = NodeId::parse_str(&head_str).map_err(|e| ConeError::StorageError { operation: "parse_node_id".into(), detail: e })?;
 
                 Ok(ConeInfo {
                     id: Uuid::parse_str(&id_str).map_err(|e| ConeError::StorageError { operation: "parse_cone_id".into(), detail: e.to_string() })?,
@@ -454,7 +454,7 @@ impl ConeStorage {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| ConeError::StorageError { operation: "fetch_message".into(), detail: e.to_string() })?
-        .ok_or_else(|| ConeError::SessionNotFound { name: format!("message:{}", message_id) })?;
+        .ok_or_else(|| ConeError::SessionNotFound { name: format!("message:{message_id}") })?;
 
         self.row_to_message(row)
     }
@@ -465,12 +465,12 @@ impl ConeStorage {
         // Parse identifier: "msg-{uuid}:{role}:{name}"
         let parts: Vec<&str> = identifier.splitn(3, ':').collect();
         if parts.len() < 2 {
-            return Err(format!("Invalid message handle format: {}", identifier).into());
+            return Err(format!("Invalid message handle format: {identifier}").into());
         }
 
         let msg_part = parts[0];
         if !msg_part.starts_with("msg-") {
-            return Err(format!("Invalid message handle format: {}", identifier).into());
+            return Err(format!("Invalid message handle format: {identifier}").into());
         }
 
         let message_id_str = &msg_part[4..]; // Strip "msg-" prefix
@@ -483,7 +483,7 @@ impl ConeStorage {
     /// Create a handle for a message
     ///
     /// Format: `{plugin_id}@1.0.0::chat:msg-{id}:{role}:{name}`
-    /// Uses ConeHandle enum for type-safe handle creation.
+    /// Uses `ConeHandle` enum for type-safe handle creation.
     pub fn message_to_handle(message: &Message, name: &str) -> crate::types::Handle {
         ConeHandle::Message {
             message_id: format!("msg-{}", message.id),
@@ -504,7 +504,7 @@ impl ConeStorage {
         Ok(Message {
             id: Uuid::parse_str(&id_str).map_err(|e| ConeError::StorageError { operation: "parse_message_id".into(), detail: e.to_string() })?,
             cone_id: Uuid::parse_str(&cone_id_str).map_err(|e| ConeError::StorageError { operation: "parse_cone_id".into(), detail: e.to_string() })?,
-            role: MessageRole::from_str(&role_str).ok_or_else(|| ConeError::StorageError { operation: "parse_role".into(), detail: format!("Invalid role: {}", role_str) })?,
+            role: MessageRole::from_str(&role_str).ok_or_else(|| ConeError::StorageError { operation: "parse_role".into(), detail: format!("Invalid role: {role_str}") })?,
             content: row.get("content"),
             created_at: row.get("created_at"),
             model_id: row.get("model_id"),
@@ -519,8 +519,8 @@ impl ConeStorage {
         let head_str: String = row.get("canonical_head");
         let metadata_json: Option<String> = row.get("metadata");
 
-        let tree_id = TreeId::parse_str(&tree_id_str).map_err(|e| ConeError::StorageError { operation: "parse_tree_id".into(), detail: e.to_string() })?;
-        let node_id = NodeId::parse_str(&head_str).map_err(|e| ConeError::StorageError { operation: "parse_node_id".into(), detail: e.to_string() })?;
+        let tree_id = TreeId::parse_str(&tree_id_str).map_err(|e| ConeError::StorageError { operation: "parse_tree_id".into(), detail: e })?;
+        let node_id = NodeId::parse_str(&head_str).map_err(|e| ConeError::StorageError { operation: "parse_node_id".into(), detail: e })?;
 
         Ok(ConeConfig {
             id: Uuid::parse_str(&id_str).map_err(|e| ConeError::StorageError { operation: "parse_cone_id".into(), detail: e.to_string() })?,
@@ -580,7 +580,7 @@ mod tests {
         // "msg-{uuid}:{role}:{name}"
         let parts: Vec<&str> = identifier.splitn(3, ':').collect();
 
-        assert_eq!(parts.len(), 3, "identifier should have 3 parts: {}", identifier);
+        assert_eq!(parts.len(), 3, "identifier should have 3 parts: {identifier}");
         assert!(parts[0].starts_with("msg-"), "first part should start with 'msg-': {}", parts[0]);
 
         // The message ID should be extractable

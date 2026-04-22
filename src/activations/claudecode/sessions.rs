@@ -1,9 +1,9 @@
-/// Session File Management Module
-///
-/// Provides CRUD operations for Claude Code session files stored as JSONL
-/// in ~/.claude/projects/<project>/<session-id>.jsonl
-///
-/// Also provides integration with arbor for importing/exporting sessions.
+//! Session File Management Module
+//!
+//! Provides CRUD operations for Claude Code session files stored as JSONL
+//! in `~/.claude/projects/<project>/<session-id>.jsonl`
+//!
+//! Also provides integration with arbor for importing/exporting sessions.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -158,7 +158,7 @@ pub fn get_sessions_base_dir() -> PathBuf {
 pub fn get_session_path(project_path: &str, session_id: &str) -> PathBuf {
     get_sessions_base_dir()
         .join(project_path)
-        .join(format!("{}.jsonl", session_id))
+        .join(format!("{session_id}.jsonl"))
 }
 
 /// List all sessions for a project
@@ -172,12 +172,12 @@ pub async fn list_sessions(project_path: &str) -> Result<Vec<String>, String> {
     let mut sessions = vec![];
     let mut entries = fs::read_dir(&dir)
         .await
-        .map_err(|e| format!("Failed to read directory: {}", e))?;
+        .map_err(|e| format!("Failed to read directory: {e}"))?;
 
     while let Some(entry) = entries
         .next_entry()
         .await
-        .map_err(|e| format!("Failed to read entry: {}", e))?
+        .map_err(|e| format!("Failed to read entry: {e}"))?
     {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
@@ -198,12 +198,12 @@ pub async fn read_session(
     let path = get_session_path(project_path, session_id);
 
     if !path.exists() {
-        return Err(format!("Session not found: {}", session_id));
+        return Err(format!("Session not found: {session_id}"));
     }
 
     let file = fs::File::open(&path)
         .await
-        .map_err(|e| format!("Failed to open session file: {}", e))?;
+        .map_err(|e| format!("Failed to open session file: {e}"))?;
 
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
@@ -212,7 +212,7 @@ pub async fn read_session(
     while let Some(line) = lines
         .next_line()
         .await
-        .map_err(|e| format!("Failed to read line: {}", e))?
+        .map_err(|e| format!("Failed to read line: {e}"))?
     {
         if line.trim().is_empty() {
             continue;
@@ -242,24 +242,24 @@ pub async fn append_to_session(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .await
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+            .map_err(|e| format!("Failed to create directory: {e}"))?;
     }
 
-    let json = serde_json::to_string(event).map_err(|e| format!("Failed to serialize event: {}", e))?;
+    let json = serde_json::to_string(event).map_err(|e| format!("Failed to serialize event: {e}"))?;
 
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .await
-        .map_err(|e| format!("Failed to open session file: {}", e))?;
+        .map_err(|e| format!("Failed to open session file: {e}"))?;
 
     file.write_all(json.as_bytes())
         .await
-        .map_err(|e| format!("Failed to write to session: {}", e))?;
+        .map_err(|e| format!("Failed to write to session: {e}"))?;
     file.write_all(b"\n")
         .await
-        .map_err(|e| format!("Failed to write newline: {}", e))?;
+        .map_err(|e| format!("Failed to write newline: {e}"))?;
 
     Ok(())
 }
@@ -269,12 +269,12 @@ pub async fn delete_session(project_path: &str, session_id: &str) -> Result<(), 
     let path = get_session_path(project_path, session_id);
 
     if !path.exists() {
-        return Err(format!("Session not found: {}", session_id));
+        return Err(format!("Session not found: {session_id}"));
     }
 
     fs::remove_file(&path)
         .await
-        .map_err(|e| format!("Failed to delete session: {}", e))?;
+        .map_err(|e| format!("Failed to delete session: {e}"))?;
 
     Ok(())
 }
@@ -318,7 +318,7 @@ pub async fn import_to_arbor(
                     content: data.message.content.clone(),
                 };
                 let json =
-                    serde_json::to_string(&node_event).map_err(|e| format!("Serialize error: {}", e))?;
+                    serde_json::to_string(&node_event).map_err(|e| format!("Serialize error: {e}"))?;
 
                 let node_id = arbor
                     .node_create_text(&tree_id, Some(current_parent), json, None)
@@ -331,7 +331,7 @@ pub async fn import_to_arbor(
                 // Create assistant start node
                 let start_event = NodeEvent::AssistantStart;
                 let json = serde_json::to_string(&start_event)
-                    .map_err(|e| format!("Serialize error: {}", e))?;
+                    .map_err(|e| format!("Serialize error: {e}"))?;
 
                 let start_node = arbor
                     .node_create_text(&tree_id, Some(current_parent), json, None)
@@ -363,7 +363,7 @@ pub async fn import_to_arbor(
                         };
 
                         let json = serde_json::to_string(&node_event)
-                            .map_err(|e| format!("Serialize error: {}", e))?;
+                            .map_err(|e| format!("Serialize error: {e}"))?;
 
                         let node_id = arbor
                             .node_create_text(&tree_id, Some(current_parent), json, None)
@@ -377,7 +377,7 @@ pub async fn import_to_arbor(
                 // Create assistant complete node
                 let complete_event = NodeEvent::AssistantComplete { usage: None };
                 let json = serde_json::to_string(&complete_event)
-                    .map_err(|e| format!("Serialize error: {}", e))?;
+                    .map_err(|e| format!("Serialize error: {e}"))?;
 
                 let complete_node = arbor
                     .node_create_text(&tree_id, Some(current_parent), json, None)
@@ -418,7 +418,7 @@ pub async fn export_from_arbor(
         for (node_id, node) in &tree.nodes {
             if let Some(parent_id) = &node.parent {
                 children.entry(*parent_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(*node_id);
             }
         }
@@ -591,7 +591,7 @@ pub async fn export_from_arbor(
     Ok(())
 }
 
-/// Helper to build AssistantEvent from content blocks
+/// Helper to build `AssistantEvent` from content blocks
 fn build_assistant_event(blocks: Vec<ContentBlock>, session_id: &str) -> SessionEvent {
     SessionEvent::Assistant {
         data: AssistantEvent {

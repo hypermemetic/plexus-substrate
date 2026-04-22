@@ -21,14 +21,14 @@ fn parse_err(context: &'static str, detail: impl std::fmt::Display) -> ClaudeCod
 }
 
 /// Helper to create database errors
-fn db_err(operation: &'static str, source: sqlx::Error) -> ClaudeCodeError {
+const fn db_err(operation: &'static str, source: sqlx::Error) -> ClaudeCodeError {
     ClaudeCodeError::Database { operation, source }
 }
 
-/// Configuration for ClaudeCode storage
+/// Configuration for `ClaudeCode` storage
 #[derive(Debug, Clone)]
 pub struct ClaudeCodeStorageConfig {
-    /// Path to SQLite database for ClaudeCode sessions
+    /// Path to `SQLite` database for `ClaudeCode` sessions
     pub db_path: PathBuf,
 }
 
@@ -49,7 +49,7 @@ struct ActiveStreamBuffer {
     events: Vec<BufferedEvent>,
 }
 
-/// Storage layer for ClaudeCode sessions
+/// Storage layer for `ClaudeCode` sessions
 pub struct ClaudeCodeStorage {
     pool: SqlitePool,
     arbor: Arc<ArborStorage>,
@@ -58,7 +58,7 @@ pub struct ClaudeCodeStorage {
 }
 
 impl ClaudeCodeStorage {
-    /// Create a new ClaudeCode storage instance with a shared Arbor storage
+    /// Create a new `ClaudeCode` storage instance with a shared Arbor storage
     pub async fn new(
         config: ClaudeCodeStorageConfig,
         arbor: Arc<ArborStorage>,
@@ -79,7 +79,7 @@ impl ClaudeCodeStorage {
     /// Run database migrations
     async fn run_migrations(&self) -> Result<(), ClaudeCodeError> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS claudecode_sessions (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
@@ -125,7 +125,7 @@ impl ClaudeCodeStorage {
 
             CREATE INDEX IF NOT EXISTS idx_claudecode_unknown_events_session ON claudecode_unknown_events(session_id);
             CREATE INDEX IF NOT EXISTS idx_claudecode_unknown_events_type ON claudecode_unknown_events(event_type);
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await
@@ -150,7 +150,7 @@ impl ClaudeCodeStorage {
     // Session CRUD Operations
     // ========================================================================
 
-    /// Create a new ClaudeCode session with a new conversation tree
+    /// Create a new `ClaudeCode` session with a new conversation tree
     pub async fn session_create(
         &self,
         name: String,
@@ -209,7 +209,7 @@ impl ClaudeCodeStorage {
             Ok(_) => name,
             Err(e) if e.to_string().contains("UNIQUE constraint failed") => {
                 // Name collision - append #uuid to make it unique
-                let unique_name = format!("{}#{}", name, session_id);
+                let unique_name = format!("{name}#{session_id}");
 
                 sqlx::query(
                     "INSERT INTO claudecode_sessions (id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at)
@@ -286,7 +286,7 @@ impl ClaudeCodeStorage {
         }
 
         // Try partial match
-        let pattern = format!("{}%", name);
+        let pattern = format!("{name}%");
         let rows = sqlx::query(
             "SELECT id, name, claude_session_id, loopback_session_id, tree_id, canonical_head, working_dir, model, system_prompt, mcp_config, loopback_enabled, metadata, created_at, updated_at
              FROM claudecode_sessions WHERE name LIKE ?",
@@ -389,7 +389,7 @@ impl ClaudeCodeStorage {
         Ok(())
     }
 
-    /// Update the loopback_session_id after session creation
+    /// Update the `loopback_session_id` after session creation
     pub async fn session_update_loopback_id(
         &self,
         session_id: &ClaudeCodeId,
@@ -408,7 +408,7 @@ impl ClaudeCodeStorage {
         Ok(())
     }
 
-    /// Update the claude_session_id (real Claude UUID) after first successful chat
+    /// Update the `claude_session_id` (real Claude UUID) after first successful chat
     pub async fn session_update_claude_id(
         &self,
         session_id: &ClaudeCodeId,
@@ -621,7 +621,7 @@ impl ClaudeCodeStorage {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| db_err("fetch message", e))?
-        .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("message:{}", message_id) })?;
+        .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("message:{message_id}") })?;
 
         self.row_to_message(row)
     }
@@ -631,12 +631,12 @@ impl ClaudeCodeStorage {
     pub async fn resolve_message_handle(&self, identifier: &str) -> Result<Message, ClaudeCodeError> {
         let parts: Vec<&str> = identifier.splitn(3, ':').collect();
         if parts.len() < 2 {
-            return Err(parse_err("message handle", format!("invalid format: {}", identifier)));
+            return Err(parse_err("message handle", format!("invalid format: {identifier}")));
         }
 
         let msg_part = parts[0];
         if !msg_part.starts_with("msg-") {
-            return Err(parse_err("message handle", format!("invalid prefix: {}", identifier)));
+            return Err(parse_err("message handle", format!("invalid prefix: {identifier}")));
         }
 
         let message_id_str = &msg_part[4..];
@@ -649,7 +649,7 @@ impl ClaudeCodeStorage {
     /// Create a handle for a message
     ///
     /// Format: `{plugin_id}@1.0.0::chat:msg-{id}:{role}:{name}`
-    /// Uses ClaudeCodeHandle enum for type-safe handle creation.
+    /// Uses `ClaudeCodeHandle` enum for type-safe handle creation.
     pub fn message_to_handle(message: &Message, name: &str) -> crate::types::Handle {
         ClaudeCodeHandle::Message {
             message_id: format!("msg-{}", message.id),
@@ -678,7 +678,7 @@ impl ClaudeCodeStorage {
              VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&id)
-        .bind(session_id.map(|s| s.to_string()))
+        .bind(session_id.map(std::string::ToString::to_string))
         .bind(event_type)
         .bind(&data_json)
         .bind(now)
@@ -698,7 +698,7 @@ impl ClaudeCodeStorage {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| db_err("fetch unknown event", e))?
-        .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("unknown_event:{}", id) })?;
+        .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("unknown_event:{id}") })?;
 
         let event_type: String = row.get("event_type");
         let data_json: String = row.get("data");
@@ -770,7 +770,7 @@ impl ClaudeCodeStorage {
     ) -> Result<(), ClaudeCodeError> {
         let mut streams = self.streams.write().await;
         let buffer = streams.get_mut(stream_id)
-            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{}", stream_id) })?;
+            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{stream_id}") })?;
         buffer.info.user_position = Some(position);
         Ok(())
     }
@@ -784,7 +784,7 @@ impl ClaudeCodeStorage {
         let now = current_timestamp();
         let mut streams = self.streams.write().await;
         let buffer = streams.get_mut(stream_id)
-            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{}", stream_id) })?;
+            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{stream_id}") })?;
 
         let seq = buffer.info.event_count;
         buffer.events.push(BufferedEvent {
@@ -807,7 +807,7 @@ impl ClaudeCodeStorage {
         let now = current_timestamp();
         let mut streams = self.streams.write().await;
         let buffer = streams.get_mut(stream_id)
-            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{}", stream_id) })?;
+            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{stream_id}") })?;
 
         buffer.info.status = status;
         if status == StreamStatus::Complete || status == StreamStatus::Failed {
@@ -824,7 +824,7 @@ impl ClaudeCodeStorage {
     pub async fn stream_get_info(&self, stream_id: &StreamId) -> Result<StreamInfo, ClaudeCodeError> {
         let streams = self.streams.read().await;
         let buffer = streams.get(stream_id)
-            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{}", stream_id) })?;
+            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{stream_id}") })?;
         Ok(buffer.info.clone())
     }
 
@@ -838,7 +838,7 @@ impl ClaudeCodeStorage {
     ) -> Result<(StreamInfo, Vec<BufferedEvent>), ClaudeCodeError> {
         let mut streams = self.streams.write().await;
         let buffer = streams.get_mut(stream_id)
-            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{}", stream_id) })?;
+            .ok_or_else(|| ClaudeCodeError::SessionNotFound { identifier: format!("stream:{stream_id}") })?;
 
         let start = from_seq.unwrap_or(buffer.info.read_position) as usize;
         let max_events = limit.unwrap_or(100);
@@ -894,12 +894,12 @@ impl ClaudeCodeStorage {
 
     /// Render arbor tree path into Claude API messages format
     ///
-    /// Walks from start to end node, parsing NodeEvent JSON from each node,
+    /// Walks from start to end node, parsing `NodeEvent` JSON from each node,
     /// and groups into Claude messages array.
     ///
     /// # Algorithm
     /// 1. Get path from start to end via arbor
-    /// 2. Parse each node's content as NodeEvent
+    /// 2. Parse each node's content as `NodeEvent`
     /// 3. Group into messages based on event type
     /// 4. Return messages array
     pub async fn render_messages(
@@ -1188,7 +1188,7 @@ mod tests {
             let mut streams = streams.write().await;
             let buffer = streams.get_mut(&stream_id).unwrap();
 
-            let events: Vec<_> = buffer.events.iter().skip(0).take(10).cloned().collect();
+            let events: Vec<_> = buffer.events.iter().take(10).cloned().collect();
             assert_eq!(events.len(), 2);
             assert_eq!(events[0].seq, 0);
             assert_eq!(events[1].seq, 1);
@@ -1202,11 +1202,11 @@ mod tests {
             let streams = streams.read().await;
             let buffer = streams.get(&stream_id).unwrap();
 
-            let events: Vec<_> = buffer.events.iter()
+            let events_len = buffer.events.iter()
                 .skip(buffer.info.read_position as usize)
                 .take(10)
-                .collect();
-            assert_eq!(events.len(), 0);
+                .count();
+            assert_eq!(events_len, 0);
         }
 
         // Add more events
@@ -1282,13 +1282,13 @@ mod render_tests {
     async fn create_test_storage() -> (ClaudeCodeStorage, PathBuf) {
         let temp_dir = std::env::temp_dir();
         let test_id = Uuid::new_v4();
-        let arbor_path = temp_dir.join(format!("test_arbor_{}.db", test_id));
-        let claudecode_path = temp_dir.join(format!("test_claudecode_{}.db", test_id));
+        let arbor_path = temp_dir.join(format!("test_arbor_{test_id}.db"));
+        let claudecode_path = temp_dir.join(format!("test_claudecode_{test_id}.db"));
 
         let arbor_config = ArborConfig {
             db_path: arbor_path.clone(),
-            scheduled_deletion_window: 604800,
-            archive_window: 2592000,
+            scheduled_deletion_window: 604_800,
+            archive_window: 2_592_000,
             auto_cleanup: false, // Disable for tests
             cleanup_interval: 3600,
         };
@@ -1304,7 +1304,7 @@ mod render_tests {
         (storage, arbor_path)
     }
 
-    /// Helper to create a node with NodeEvent content
+    /// Helper to create a node with `NodeEvent` content
     async fn create_event_node(
         arbor: &ArborStorage,
         tree_id: &TreeId,

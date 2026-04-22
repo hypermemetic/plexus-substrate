@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 /// Errors from the Claude Code executor
 #[derive(Debug, Error)]
-pub enum ExecutorError {
+pub(super) enum ExecutorError {
     #[error("failed to spawn claude process (binary='{binary}', cwd='{cwd}'): {source}")]
     SpawnFailed {
         binary: String,
@@ -40,7 +40,7 @@ fn mcp_host_port_from_url(url: &str) -> String {
     if host_port.contains(':') {
         host_port.to_string()
     } else {
-        format!("{}:4444", host_port)
+        format!("{host_port}:4444")
     }
 }
 
@@ -64,14 +64,12 @@ pub async fn check_mcp_reachable() -> Result<(), String> {
     {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(format!(
-            "MCP server not reachable at {} ({}). \
-             Start the substrate without --no-mcp so the permission-prompt tool is available.",
-            url, e
+            "MCP server not reachable at {url} ({e}). \
+             Start the substrate without --no-mcp so the permission-prompt tool is available."
         )),
         Err(_) => Err(format!(
-            "MCP server connection timed out at {}. \
-             Start the substrate without --no-mcp so the permission-prompt tool is available.",
-            url
+            "MCP server connection timed out at {url}. \
+             Start the substrate without --no-mcp so the permission-prompt tool is available."
         )),
     }
 }
@@ -140,7 +138,7 @@ impl ClaudeCodeExecutor {
         }
     }
 
-    pub fn with_path(path: String) -> Self {
+    pub const fn with_path(path: String) -> Self {
         Self { claude_path: path }
     }
 
@@ -160,14 +158,14 @@ impl ClaudeCodeExecutor {
 
         for candidate in &candidates {
             if candidate.exists() {
-                return candidate.to_str().map(|s| s.to_string());
+                return candidate.to_str().map(std::string::ToString::to_string);
             }
         }
 
         // Try PATH
         which::which("claude")
             .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .and_then(|p| p.to_str().map(std::string::ToString::to_string))
     }
 
     /// Build command line arguments from config
@@ -241,11 +239,11 @@ impl ClaudeCodeExecutor {
         let temp_path = temp_dir.join(format!("mcp-config-{}.json", uuid::Uuid::new_v4()));
 
         let json = serde_json::to_string_pretty(config)
-            .map_err(|e| format!("Failed to serialize MCP config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize MCP config: {e}"))?;
 
         tokio::fs::write(&temp_path, json)
             .await
-            .map_err(|e| format!("Failed to write MCP config: {}", e))?;
+            .map_err(|e| format!("Failed to write MCP config: {e}"))?;
 
         Ok(temp_path.to_string_lossy().to_string())
     }
@@ -268,7 +266,7 @@ impl ClaudeCodeExecutor {
 
             // Include session_id in URL for correlation when loopback_permit is called
             let plexus_url = if let Some(ref sid) = loopback_session_id {
-                format!("{}?session_id={}", base_url, sid)
+                format!("{base_url}?session_id={sid}")
             } else {
                 base_url
             };
@@ -300,7 +298,7 @@ impl ClaudeCodeExecutor {
             match config.mcp_config {
                 Some(existing) => {
                     // Merge mcpServers from both
-                    let mut merged = existing.clone();
+                    let mut merged = existing;
                     if let (Some(existing_servers), Some(loopback_servers)) = (
                         merged.get_mut("mcpServers"),
                         loopback_mcp.get("mcpServers")
@@ -388,7 +386,7 @@ impl ClaudeCodeExecutor {
             // This avoids any potential issues with nested Claude sessions
             fn shell_escape(s: &str) -> String {
                 // Escape by wrapping in single quotes and escaping any single quotes
-                format!("'{}'", s.replace("'", "'\\''"))
+                format!("'{}'", s.replace('\'', "'\\''"))
             }
 
             let shell_cmd = format!(
@@ -406,7 +404,7 @@ impl ClaudeCodeExecutor {
             yield RawClaudeEvent::LaunchCommand { command: shell_cmd.clone() };
 
             let mut cmd = Command::new("bash");
-            cmd.args(&["-c", &shell_cmd])
+            cmd.args(["-c", &shell_cmd])
                 .current_dir(&working_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -505,16 +503,16 @@ impl ClaudeCodeExecutor {
         })
     }
 
-    /// Sync version of write_mcp_config for use in async stream
+    /// Sync version of `write_mcp_config` for use in async stream
     fn write_mcp_config_sync(config: &Value) -> Result<String, String> {
         let temp_dir = std::env::temp_dir();
         let temp_path = temp_dir.join(format!("mcp-config-{}.json", uuid::Uuid::new_v4()));
 
         let json = serde_json::to_string_pretty(config)
-            .map_err(|e| format!("Failed to serialize MCP config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize MCP config: {e}"))?;
 
         std::fs::write(&temp_path, json)
-            .map_err(|e| format!("Failed to write MCP config: {}", e))?;
+            .map_err(|e| format!("Failed to write MCP config: {e}"))?;
 
         Ok(temp_path.to_string_lossy().to_string())
     }

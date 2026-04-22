@@ -2,7 +2,7 @@ use super::{
     executor::{ClaudeCodeExecutor, LaunchConfig},
     sessions,
     storage::ClaudeCodeStorage,
-    types::*,
+    types::{ResolveResult, NodeEvent, ClaudeCodeConfig, ChatEvent, MessageRole, Position, RawClaudeEvent, StreamEventInner, StreamDelta, StreamContentBlock, RawContentBlock, ChatUsage, Model, CreateResult, ClaudeCodeError, GetResult, ListResult, DeleteResult, ForkResult, ChatStartResult, StreamId, PollResult, ClaudeCodeId, StreamListResult, GetTreeResult, RenderResult, SessionsListResult, SessionsGetResult, SessionsImportResult, SessionsExportResult, SessionsDeleteResult, StreamStatus},
 };
 use crate::activations::arbor::{NodeId, TreeId};
 use crate::plexus::{HubContext, NoParent};
@@ -13,10 +13,10 @@ use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 use tracing::Instrument;
 
-/// ClaudeCode activation - manages Claude Code sessions with Arbor-backed history
+/// `ClaudeCode` activation - manages Claude Code sessions with Arbor-backed history
 ///
 /// Generic over `P: HubContext` to allow different parent contexts:
-/// - `Weak<DynamicHub>` when registered with a DynamicHub
+/// - `Weak<DynamicHub>` when registered with a `DynamicHub`
 /// - Custom context types for sub-hubs
 /// - `NoParent` for standalone testing
 #[derive(Clone)]
@@ -29,7 +29,7 @@ pub struct ClaudeCode<P: HubContext = NoParent> {
 }
 
 impl<P: HubContext> ClaudeCode<P> {
-    /// Create a new ClaudeCode with a specific parent context type
+    /// Create a new `ClaudeCode` with a specific parent context type
     pub fn with_context_type(storage: Arc<ClaudeCodeStorage>) -> Self {
         Self {
             storage,
@@ -51,8 +51,8 @@ impl<P: HubContext> ClaudeCode<P> {
 
     /// Inject parent context for resolving foreign handles
     ///
-    /// Called during hub construction (e.g., via Arc::new_cyclic for DynamicHub).
-    /// This allows ClaudeCode to resolve handles from other activations when walking arbor trees.
+    /// Called during hub construction (e.g., via `Arc::new_cyclic` for `DynamicHub`).
+    /// This allows `ClaudeCode` to resolve handles from other activations when walking arbor trees.
     pub fn inject_parent(&self, parent: P) {
         let _ = self.hub.set(parent);
     }
@@ -64,14 +64,14 @@ impl<P: HubContext> ClaudeCode<P> {
 
     /// Get a reference to the parent context
     ///
-    /// Returns None if inject_parent hasn't been called yet.
+    /// Returns None if `inject_parent` hasn't been called yet.
     pub fn parent(&self) -> Option<&P> {
         self.hub.get()
     }
 
     /// Resolve a claudecode handle to its message content
     ///
-    /// Called by the macro-generated resolve_handle method.
+    /// Called by the macro-generated `resolve_handle` method.
     /// Handle format: {plugin_id}@1.0.0::chat:msg-{uuid}:{role}:{name}
     pub async fn resolve_handle_impl(
         &self,
@@ -107,7 +107,7 @@ impl<P: HubContext> ClaudeCode<P> {
                 }
                 Err(e) => {
                     yield ResolveResult::Error {
-                        message: format!("Failed to resolve handle: {}", e),
+                        message: format!("Failed to resolve handle: {e}"),
                     };
                 }
             }
@@ -117,7 +117,7 @@ impl<P: HubContext> ClaudeCode<P> {
     }
 }
 
-/// Convenience constructors for ClaudeCode with NoParent (standalone/testing)
+/// Convenience constructors for `ClaudeCode` with `NoParent` (standalone/testing)
 impl ClaudeCode<NoParent> {
     pub fn new(storage: Arc<ClaudeCodeStorage>) -> Self {
         Self::with_context_type(storage)
@@ -140,7 +140,7 @@ async fn create_event_node(
     event: &NodeEvent,
 ) -> Result<crate::activations::arbor::NodeId, String> {
     let json = serde_json::to_string(event)
-        .map_err(|e| format!("Failed to serialize event: {}", e))?;
+        .map_err(|e| format!("Failed to serialize event: {e}"))?;
 
     arbor.node_create_text(tree_id, Some(*parent_id), json, None)
         .await
@@ -165,7 +165,7 @@ async fn create_event_node(
 /// `ChatEvent`s to the caller.
 ///
 /// Callers resolve the session by whatever key makes sense (name for flat
-/// `chat`, session_id for the typed `session` child-gate) and hand a fully
+/// `chat`, `session_id` for the typed `session` child-gate) and hand a fully
 /// materialized `ClaudeCodeConfig` in; this helper owns the rest of the turn.
 fn chat_stream_for_config(
     storage: Arc<ClaudeCodeStorage>,
@@ -320,12 +320,13 @@ fn chat_stream_for_config(
                                 }
                             }
                         }
-                        StreamEventInner::ContentBlockStart { content_block, .. } => {
-                            if let Some(StreamContentBlock::ToolUse { id, name, .. }) = content_block {
-                                current_tool_id = Some(id);
-                                current_tool_name = Some(name);
-                                current_tool_input.clear();
-                            }
+                        StreamEventInner::ContentBlockStart {
+                            content_block: Some(StreamContentBlock::ToolUse { id, name, .. }),
+                            ..
+                        } => {
+                            current_tool_id = Some(id);
+                            current_tool_name = Some(name);
+                            current_tool_input.clear();
                         }
                         StreamEventInner::ContentBlockStop { .. } => {
                             if let (Some(id), Some(name)) = (current_tool_id.take(), current_tool_name.take()) {
@@ -806,7 +807,7 @@ impl<P: HubContext> ClaudeCode<P> {
         }
     }
 
-    /// Start an async chat - returns immediately with stream_id for polling
+    /// Start an async chat - returns immediately with `stream_id` for polling
     ///
     /// This is the non-blocking version of chat, designed for loopback scenarios
     /// where the parent needs to poll for events and handle tool approvals.
@@ -879,7 +880,7 @@ impl<P: HubContext> ClaudeCode<P> {
     /// Poll a stream for new events
     ///
     /// Returns events since the last poll (or from the specified offset).
-    /// Use this to read events from an async chat started with chat_async.
+    /// Use this to read events from an async chat started with `chat_async`.
     #[plexus_macros::method(params(
         stream_id = "Stream ID returned from chat_async",
         from_seq = "Optional: start reading from this sequence number",
@@ -1377,12 +1378,13 @@ impl<P: HubContext> ClaudeCode<P> {
                                 }
                             }
                         }
-                        StreamEventInner::ContentBlockStart { content_block, .. } => {
-                            if let Some(StreamContentBlock::ToolUse { id, name, .. }) = content_block {
-                                current_tool_id = Some(id);
-                                current_tool_name = Some(name);
-                                current_tool_input.clear();
-                            }
+                        StreamEventInner::ContentBlockStart {
+                            content_block: Some(StreamContentBlock::ToolUse { id, name, .. }),
+                            ..
+                        } => {
+                            current_tool_id = Some(id);
+                            current_tool_name = Some(name);
+                            current_tool_input.clear();
                         }
                         StreamEventInner::ContentBlockStop { .. } => {
                             if let (Some(id), Some(name)) = (current_tool_id.take(), current_tool_name.take()) {
@@ -1719,7 +1721,7 @@ impl SessionActivation {
     /// Constructed by `ClaudeCode::session(id)` after confirming the session
     /// exists; callers outside the child gate should prefer that path so
     /// nonexistent IDs surface as `None`.
-    pub fn new(
+    pub const fn new(
         session_id: ClaudeCodeId,
         storage: Arc<ClaudeCodeStorage>,
         executor: ClaudeCodeExecutor,
@@ -1729,13 +1731,12 @@ impl SessionActivation {
 
     /// The session this activation is bound to.
     ///
-    /// Public accessor for HandleEnum integration — see IR-18. Kept public
-    /// for parity with the cone precedent (`ConeActivation::cone_id`), which
-    /// is reachable via `pub use` re-export while `SessionActivation` is not;
-    /// hence the explicit `allow(dead_code)` here rather than relying on
-    /// re-export reachability.
-    #[allow(dead_code)]
-    pub fn session_id(&self) -> ClaudeCodeId {
+    /// Public accessor for `HandleEnum` integration — see IR-18. Mirrors the
+    /// cone precedent (`ConeActivation::cone_id`), which is reachable via
+    /// `pub use` re-export on `activations::cone`. SUB-CLEAN-2 re-exported
+    /// `SessionActivation` for parity, so this accessor is now reachable
+    /// from the public API.
+    pub const fn session_id(&self) -> ClaudeCodeId {
         self.session_id
     }
 }
@@ -1757,7 +1758,7 @@ impl SessionActivation {
         ephemeral = "If true, creates nodes but doesn't advance head and marks for deletion",
         allowed_tools = "Optional list of tools to allow (e.g. [\"WebSearch\", \"Read\"])"
     ))]
-    pub async fn chat(
+    pub(super) async fn chat(
         &self,
         prompt: String,
         ephemeral: Option<bool>,
@@ -1796,7 +1797,7 @@ impl SessionActivation {
 
     /// Fetch this session's configuration.
     #[plexus_macros::method]
-    pub async fn get(&self) -> impl Stream<Item = GetResult> + Send + 'static {
+    pub(super) async fn get(&self) -> impl Stream<Item = GetResult> + Send + 'static {
         let storage = self.storage.clone();
         let session_id = self.session_id;
 
@@ -1814,7 +1815,7 @@ impl SessionActivation {
     /// further method invocations on the same `SessionActivation` will
     /// return `SessionNotFound`-style errors.
     #[plexus_macros::method]
-    pub async fn delete(&self) -> impl Stream<Item = DeleteResult> + Send + 'static {
+    pub(super) async fn delete(&self) -> impl Stream<Item = DeleteResult> + Send + 'static {
         let storage = self.storage.clone();
         let session_id = self.session_id;
 
@@ -1839,17 +1840,17 @@ mod ir18_tests {
     use crate::activations::claudecode::types::Model;
     use crate::plexus::{Activation, ChildRouter, MethodRole};
 
-    /// Spin up a ClaudeCode backed by temp-file storage for router tests.
+    /// Spin up a `ClaudeCode` backed by temp-file storage for router tests.
     async fn setup_claudecode() -> (ClaudeCode<crate::plexus::NoParent>, std::path::PathBuf, std::path::PathBuf) {
         let temp_dir = std::env::temp_dir();
         let test_id = uuid::Uuid::new_v4();
-        let arbor_path = temp_dir.join(format!("test_ir18_arbor_{}.db", test_id));
-        let claudecode_path = temp_dir.join(format!("test_ir18_claudecode_{}.db", test_id));
+        let arbor_path = temp_dir.join(format!("test_ir18_arbor_{test_id}.db"));
+        let claudecode_path = temp_dir.join(format!("test_ir18_claudecode_{test_id}.db"));
 
         let arbor_config = ArborConfig {
             db_path: arbor_path.clone(),
-            scheduled_deletion_window: 604800,
-            archive_window: 2592000,
+            scheduled_deletion_window: 604_800,
+            archive_window: 2_592_000,
             auto_cleanup: false,
             cleanup_interval: 3600,
         };

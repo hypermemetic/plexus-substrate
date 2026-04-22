@@ -28,7 +28,7 @@ use jsonrpsee::{
 use rmcp::{
     ErrorData as McpError,
     ServerHandler,
-    model::*,
+    model::{Tool, ServerInfo, ProtocolVersion, ServerCapabilities, Implementation, PaginatedRequestParam, ListToolsResult, CallToolRequestParam, CallToolResult, ProgressNotificationParam, LoggingMessageNotificationParam, LoggingLevel, Content},
     service::{RequestContext, RoleServer},
     transport::streamable_http_server::{
         session::local::LocalSessionManager,
@@ -38,7 +38,6 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
-use form_urlencoded;
 
 /// CLI arguments for MCP gateway
 #[derive(Parser, Debug)]
@@ -89,7 +88,7 @@ struct PluginSchema {
     #[allow(dead_code)]
     description: String,
     methods: Vec<MethodSchema>,
-    /// Children (for hub activations implementing ChildRouter)
+    /// Children (for hub activations implementing `ChildRouter`)
     children: Option<Vec<ChildSummary>>,
 }
 
@@ -193,11 +192,11 @@ impl PlexusClient {
         let client = client.as_ref().ok_or("Not connected")?;
 
         // Route through substrate.call to get child schemas
-        let method = format!("{}.schema", namespace);
+        let method = format!("{namespace}.schema");
 
         // Use ObjectParams for named params (object), not positional (array)
         let mut params = ObjectParams::new();
-        params.insert("method", &method).map_err(|e| format!("Failed to build params: {}", e))?;
+        params.insert("method", &method).map_err(|e| format!("Failed to build params: {e}"))?;
 
         let mut sub = client
             .subscribe::<PlexusStreamItem, _>(
@@ -206,7 +205,7 @@ impl PlexusClient {
                 "substrate.call_unsub",
             )
             .await
-            .map_err(|e| format!("Failed to call {}: {}", method, e))?;
+            .map_err(|e| format!("Failed to call {method}: {e}"))?;
 
         while let Some(result) = sub.next().await {
             match result {
@@ -238,7 +237,7 @@ impl PlexusClient {
                 "substrate.schema_unsub",
             )
             .await
-            .map_err(|e| format!("Failed to subscribe to substrate.schema: {}", e))?;
+            .map_err(|e| format!("Failed to subscribe to substrate.schema: {e}"))?;
 
         while let Some(result) = sub.next().await {
             match result {
@@ -304,8 +303,8 @@ impl PlexusClient {
 
         // Use ObjectParams for named parameters
         let mut rpc_params = ObjectParams::new();
-        rpc_params.insert("method", method).map_err(|e| format!("Failed to build params: {}", e))?;
-        rpc_params.insert("params", &params).map_err(|e| format!("Failed to build params: {}", e))?;
+        rpc_params.insert("method", method).map_err(|e| format!("Failed to build params: {e}"))?;
+        rpc_params.insert("params", &params).map_err(|e| format!("Failed to build params: {e}"))?;
 
         let mut sub = client
             .subscribe::<PlexusStreamItem, _>(
@@ -314,7 +313,7 @@ impl PlexusClient {
                 "substrate.call_unsub",
             )
             .await
-            .map_err(|e| format!("Failed to call {}: {}", method, e))?;
+            .map_err(|e| format!("Failed to call {method}: {e}"))?;
 
         let mut results = Vec::new();
 
@@ -328,7 +327,7 @@ impl PlexusClient {
                     }
                 }
                 Err(e) => {
-                    return Err(format!("Error during call: {}", e));
+                    return Err(format!("Error during call: {e}"));
                 }
             }
         }
@@ -344,7 +343,7 @@ struct PlexusGatewayBridge {
 }
 
 impl PlexusGatewayBridge {
-    fn new(hub: Arc<PlexusClient>) -> Self {
+    const fn new(hub: Arc<PlexusClient>) -> Self {
         Self { hub }
     }
 }
@@ -363,18 +362,20 @@ fn schemas_to_tools(schemas: &[PluginSchema]) -> Vec<Tool> {
                     .params
                     .as_ref()
                     .and_then(|s| s.as_object().cloned())
-                    .map(|mut obj| {
-                        if !obj.contains_key("type") {
-                            obj.insert("type".to_string(), json!("object"));
-                        }
-                        Arc::new(obj)
-                    })
-                    .unwrap_or_else(|| {
-                        Arc::new(serde_json::Map::from_iter([(
-                            "type".to_string(),
-                            json!("object"),
-                        )]))
-                    });
+                    .map_or_else(
+                        || {
+                            Arc::new(serde_json::Map::from_iter([(
+                                "type".to_string(),
+                                json!("object"),
+                            )]))
+                        },
+                        |mut obj| {
+                            if !obj.contains_key("type") {
+                                obj.insert("type".to_string(), json!("object"));
+                            }
+                            Arc::new(obj)
+                        },
+                    );
 
                 Tool::new(name, description, input_schema)
             })
@@ -433,25 +434,25 @@ impl ServerHandler for PlexusGatewayBridge {
         let method_name = &request.name;
         let mut arguments_map = request
             .arguments
-            .unwrap_or_else(|| serde_json::Map::new());
+            .unwrap_or_default();
 
         tracing::debug!("Gateway calling tool: {} with args: {:?}", method_name, arguments_map);
 
         // Extract HTTP connection metadata from extensions and inject into arguments.
         // This makes the gateway transparent: all HTTP-level metadata (query params)
         // is forwarded to the backend without the gateway needing to know what it means.
-        eprintln!("[MCP GATEWAY] call_tool: method={}, checking for HTTP metadata...", method_name);
+        eprintln!("[MCP GATEWAY] call_tool: method={method_name}, checking for HTTP metadata...");
         if let Some(parts) = ctx.extensions.get::<http::request::Parts>() {
             eprintln!("[MCP GATEWAY] Found HTTP Parts! URI: {}", parts.uri);
             let mut connection_meta = serde_json::Map::new();
 
             // Forward ALL query parameters
             if let Some(query) = parts.uri.query() {
-                eprintln!("[MCP GATEWAY] Query string: {}", query);
+                eprintln!("[MCP GATEWAY] Query string: {query}");
                 for (key, value) in form_urlencoded::parse(query.as_bytes()) {
-                    eprintln!("[MCP GATEWAY] Query param: {}={}", key, value);
+                    eprintln!("[MCP GATEWAY] Query param: {key}={value}");
                     connection_meta.insert(
-                        format!("query.{}", key),
+                        format!("query.{key}"),
                         json!(value.to_string()),
                     );
                 }
@@ -460,11 +461,11 @@ impl ServerHandler for PlexusGatewayBridge {
             }
 
             // If we extracted any connection metadata, inject it
-            if !connection_meta.is_empty() {
-                arguments_map.insert("_connection".to_string(), json!(connection_meta));
-                eprintln!("[MCP GATEWAY] ✅ Injected connection metadata: {:?}", connection_meta);
-            } else {
+            if connection_meta.is_empty() {
                 eprintln!("[MCP GATEWAY] No connection metadata to inject");
+            } else {
+                arguments_map.insert("_connection".to_string(), json!(connection_meta));
+                eprintln!("[MCP GATEWAY] ✅ Injected connection metadata: {connection_meta:?}");
             }
         } else {
             eprintln!("[MCP GATEWAY] ❌ No HTTP Parts in extensions!");
@@ -484,7 +485,7 @@ impl ServerHandler for PlexusGatewayBridge {
         let mut buffered_data: Vec<Value> = Vec::new();
         let mut error_messages: Vec<String> = Vec::new();
         let progress_token = ctx.meta.get_progress_token();
-        let logger = format!("gateway.{}", method_name);
+        let logger = format!("gateway.{method_name}");
 
         for item in results {
             if ctx.ct.is_cancelled() {
@@ -498,7 +499,7 @@ impl ServerHandler for PlexusGatewayBridge {
                             .peer
                             .notify_progress(ProgressNotificationParam {
                                 progress_token: token.clone(),
-                                progress: percentage.unwrap_or(0.0) as f64,
+                                progress: f64::from(percentage.unwrap_or(0.0)),
                                 total: None,
                                 message: Some(message),
                             })
@@ -561,7 +562,7 @@ impl ServerHandler for PlexusGatewayBridge {
                     other => serde_json::to_string_pretty(other).unwrap_or_default(),
                 }
             } else {
-                let all_strings = buffered_data.iter().all(|v| v.is_string());
+                let all_strings = buffered_data.iter().all(serde_json::Value::is_string);
                 if all_strings {
                     buffered_data
                         .iter()

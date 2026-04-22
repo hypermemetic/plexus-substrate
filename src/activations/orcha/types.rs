@@ -33,8 +33,8 @@ impl From<String> for OrchaError {
 // Orcha Node Kind — typed dispatch
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Typed Orcha node payload — serialized into NodeSpec::Task { data }.
-/// graph_runner deserializes this to dispatch to the correct executor.
+/// Typed Orcha node payload — serialized into `NodeSpec::Task` { data }.
+/// `graph_runner` deserializes this to dispatch to the correct executor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "orcha_type", rename_all = "snake_case")]
 pub enum OrchaNodeKind {
@@ -53,7 +53,7 @@ pub enum OrchaNodeKind {
 pub type SessionId = String;
 
 /// Current state of an orcha session
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SessionState {
     /// Session is idle, ready to accept tasks
@@ -155,12 +155,12 @@ pub struct RunTaskRequest {
     /// Enable automatic approval via Haiku decision agent (default: true)
     ///
     /// When true, spawns ephemeral Haiku session to judge each approval.
-    /// When false, approvals must be handled manually via orcha.approve_request.
+    /// When false, approvals must be handled manually via `orcha.approve_request`.
     #[serde(default = "default_auto_approve")]
     pub auto_approve: bool,
 }
 
-fn default_auto_approve() -> bool {
+const fn default_auto_approve() -> bool {
     false
 }
 
@@ -168,7 +168,7 @@ fn default_cwd() -> String {
     "/workspace".to_string()
 }
 
-fn default_max_retries() -> u32 {
+const fn default_max_retries() -> u32 {
     3
 }
 
@@ -537,7 +537,7 @@ pub enum OrchaEvent {
         label: Option<String>,
         /// Ticket ID (e.g. "CALC-1") if this node was built from a ticket definition
         ticket_id: Option<String>,
-        /// Completion percentage before this node started (complete_nodes / total_nodes * 100)
+        /// Completion percentage before this node started (`complete_nodes` / `total_nodes` * 100)
         percentage: Option<u32>,
     },
 
@@ -548,7 +548,7 @@ pub enum OrchaEvent {
         /// Ticket ID (e.g. "CALC-1") if this node was built from a ticket definition
         ticket_id: Option<String>,
         output_summary: Option<String>,
-        /// Completion percentage after this node finished (complete_nodes / total_nodes * 100)
+        /// Completion percentage after this node finished (`complete_nodes` / `total_nodes` * 100)
         percentage: Option<u32>,
     },
 
@@ -559,7 +559,7 @@ pub enum OrchaEvent {
         /// Ticket ID (e.g. "CALC-1") if this node was built from a ticket definition
         ticket_id: Option<String>,
         error: String,
-        /// Completion percentage after this node failed (complete_nodes / total_nodes * 100)
+        /// Completion percentage after this node failed (`complete_nodes` / `total_nodes` * 100)
         percentage: Option<u32>,
     },
 
@@ -579,7 +579,7 @@ pub enum OrchaEvent {
         chunk: String,
     },
 
-    /// Graph was cancelled via cancel_graph
+    /// Graph was cancelled via `cancel_graph`
     Cancelled {
         graph_id: String,
     },
@@ -621,23 +621,20 @@ pub struct ValidationResult {
 pub type AgentId = String;
 
 /// Agent mode for sessions
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AgentMode {
     /// Single-agent mode (backward compatible)
+    #[default]
     Single,
     /// Multi-agent orchestration mode
     Multi,
 }
 
-impl Default for AgentMode {
-    fn default() -> Self {
-        AgentMode::Single
-    }
-}
 
-/// Agent-specific state (mirrors SessionState but for individual agents)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+/// Agent-specific state (mirrors `SessionState` but for individual agents)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum AgentState {
     /// Agent is idle, ready to start
@@ -778,7 +775,7 @@ pub enum OrchaAddDependencyResult {
 // Inline Graph Definition Types (for run_graph_definition)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Typed node spec in Orcha vocabulary — no raw NodeSpec JSON needed.
+/// Typed node spec in Orcha vocabulary — no raw `NodeSpec` JSON needed.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrchaNodeSpec {
@@ -791,7 +788,7 @@ pub enum OrchaNodeSpec {
 }
 
 /// One node in an inline graph definition.
-/// `id` is a caller-supplied stable label used in OrchaEdgeDef.
+/// `id` is a caller-supplied stable label used in `OrchaEdgeDef`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OrchaNodeDef {
     pub id: String,

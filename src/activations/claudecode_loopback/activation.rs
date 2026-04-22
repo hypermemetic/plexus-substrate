@@ -1,5 +1,5 @@
 use super::storage::{LoopbackStorage, LoopbackStorageConfig};
-use super::types::*;
+use super::types::{ApprovalStatus, ApprovalId, RespondResult, PendingResult, WaitForApprovalResult, ConfigureResult};
 use async_stream::stream;
 use futures::Stream;
 use serde_json::{json, Value};
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
-/// ClaudeCode Loopback - routes tool permissions back to parent for approval
+/// `ClaudeCode` Loopback - routes tool permissions back to parent for approval
 #[derive(Clone)]
 pub struct ClaudeCodeLoopback {
     storage: Arc<LoopbackStorage>,
@@ -31,7 +31,7 @@ impl ClaudeCodeLoopback {
         self
     }
 
-    /// Get the underlying storage (for sharing with ClaudeCode)
+    /// Get the underlying storage (for sharing with `ClaudeCode`)
     pub fn storage(&self) -> Arc<LoopbackStorage> {
         self.storage.clone()
     }
@@ -44,17 +44,23 @@ impl ClaudeCodeLoopback {
     /// Permission prompt handler - blocks until parent approves/denies
     ///
     /// This is called by Claude Code CLI via --permission-prompt-tool.
-    /// It blocks (polls) until the parent calls loopback.respond().
+    /// It blocks (polls) until the parent calls `loopback.respond()`.
     ///
     /// Returns a JSON string (not object) because Claude Code expects the MCP response
     /// to have the permission JSON already stringified in content[0].text.
-    /// See: https://github.com/anthropics/claude-code/blob/main/docs/permission-prompt-tool.md
+    /// See: <https://github.com/anthropics/claude-code/blob/main/docs/permission-prompt-tool.md>
     #[plexus_macros::method(params(
         tool_name = "Name of the tool being requested",
         tool_use_id = "Unique ID for this tool invocation",
         input = "Tool input parameters",
         _connection = "HTTP connection metadata (optional)" // Added for transparent query param forwarding
     ))]
+    // `_connection` is load-bearing as a wire-facing parameter name (Plexus
+    // transport injects connection metadata here for methods that opt in via
+    // the `_`-prefix convention). The underscore prefix is part of the wire
+    // contract, not a "kept for future use" marker — we do read the value
+    // below when present. See workspace-level `clippy::used_underscore_binding
+    // = "allow"` for the full justification.
     async fn permit(
         &self,
         tool_name: String,
@@ -73,7 +79,7 @@ impl ClaudeCodeLoopback {
             .as_ref()
             .and_then(|conn| conn.get("query.session_id"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .or_else(|| std::env::var("PLEXUS_SESSION_ID").ok())
             .or_else(|| storage.lookup_session_by_tool(&tool_use_id))
             .unwrap_or_else(|| "unknown".to_string());
@@ -253,7 +259,7 @@ impl ClaudeCodeLoopback {
                     }
                     Err(e) => {
                         yield WaitForApprovalResult::Err {
-                            message: format!("Failed to check pending approvals: {}", e)
+                            message: format!("Failed to check pending approvals: {e}")
                         };
                         return;
                     }
@@ -275,7 +281,6 @@ impl ClaudeCodeLoopback {
                 tokio::select! {
                     _ = notifier.notified() => {
                         // New approval arrived, loop will check pending again
-                        continue;
                     }
                     _ = sleep(timeout.saturating_sub(start.elapsed())) => {
                         // Timeout reached

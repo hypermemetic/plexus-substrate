@@ -4,7 +4,7 @@ use super::orchestrator::run_orchestration_task;
 use super::pm;
 use super::storage::OrchaStorage;
 use super::ticket_compiler;
-use super::types::*;
+use super::types::{OrchaEvent, RunTaskRequest, CreateSessionRequest, CreateSessionResult, AgentMode, SessionId, SessionState, UpdateSessionStateResult, GetSessionRequest, GetSessionResult, ExtractValidationResult, ValidationArtifact, RunValidationResult, IncrementRetryResult, ListSessionsResult, DeleteSessionResult, RunTaskAsyncResult, ListMonitorTreesResult, MonitorTreeInfo, CheckStatusRequest, CheckStatusResult, AgentSummary, SpawnAgentRequest, SpawnAgentResult, ListAgentsRequest, ListAgentsResult, GetAgentRequest, GetAgentResult, ListApprovalsRequest, ListApprovalsResult, ApprovalInfo, ApproveRequest, ApprovalActionResult, DenyRequest, OrchaCreateGraphResult, OrchaAddNodeResult, GatherStrategy, OrchaAddDependencyResult, OrchaNodeDef, OrchaEdgeDef, OrchaNodeSpec, ValidationResult, AgentInfo};
 use crate::activations::claudecode::{ClaudeCode, Model};
 use crate::activations::claudecode_loopback::ClaudeCodeLoopback;
 use crate::plexus::{HubContext, NoParent};
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 use uuid::Uuid;
 
-/// Registry of cancellation senders keyed by graph_id.
+/// Registry of cancellation senders keyed by `graph_id`.
 ///
 /// When `cancel_graph` is called, the sender's value is set to `true`, which all
 /// running node tasks observe via their cloned `Receiver<bool>` and exit early.
@@ -26,7 +26,7 @@ type CancelRegistry = Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::watch:
 
 /// Orcha activation - Full orchestration with approval loops and validation
 ///
-/// Provides both full orchestration (run_task) and coordination helpers.
+/// Provides both full orchestration (`run_task`) and coordination helpers.
 #[derive(Clone)]
 pub struct Orcha<P: HubContext = NoParent> {
     storage: Arc<OrchaStorage>,
@@ -35,7 +35,7 @@ pub struct Orcha<P: HubContext = NoParent> {
     arbor_storage: Arc<crate::activations::arbor::ArborStorage>,
     graph_runtime: Arc<GraphRuntime>,
     pm: Arc<pm::Pm>,
-    /// Cancellation registry: graph_id → watch sender (true = cancel).
+    /// Cancellation registry: `graph_id` → watch sender (true = cancel).
     cancel_registry: CancelRegistry,
     _phantom: PhantomData<P>,
 }
@@ -64,7 +64,7 @@ impl<P: HubContext> Orcha<P> {
 
     /// Register a new cancellation token for a graph, returning the receiver.
     ///
-    /// If a token already exists for this graph_id, it is replaced.
+    /// If a token already exists for this `graph_id`, it is replaced.
     async fn register_cancel(&self, graph_id: &str) -> tokio::sync::watch::Receiver<bool> {
         let (tx, rx) = tokio::sync::watch::channel(false);
         self.cancel_registry.lock().await.insert(graph_id.to_string(), tx);
@@ -84,7 +84,7 @@ impl<P: HubContext> Orcha<P> {
     /// lattice DB:
     ///   1. Any node stuck in `running` is marked failed with
     ///      "interrupted: substrate restarted" so the lattice can propagate the error.
-    ///   2. Any node stuck in `ready` has a fresh NodeReady event emitted so the new
+    ///   2. Any node stuck in `ready` has a fresh `NodeReady` event emitted so the new
     ///      watcher can pick it up.
     ///   3. A new `run_graph_execution` task is spawned for the graph, reconnecting
     ///      Orcha's dispatch logic to the live event stream.
@@ -193,12 +193,11 @@ impl<P: HubContext> Orcha<P> {
             let model_enum = graph_meta.as_ref()
                 .and_then(|c| c.get("model"))
                 .and_then(|m| m.as_str())
-                .map(|s| match s {
+                .map_or(crate::activations::claudecode::Model::Sonnet, |s| match s {
                     "opus" => crate::activations::claudecode::Model::Opus,
                     "haiku" => crate::activations::claudecode::Model::Haiku,
                     _ => crate::activations::claudecode::Model::Sonnet,
-                })
-                .unwrap_or(crate::activations::claudecode::Model::Sonnet);
+                });
 
             let working_directory = graph_meta.as_ref()
                 .and_then(|c| c.get("working_directory"))
@@ -243,7 +242,7 @@ impl<P: HubContext> Orcha<P> {
     }
 }
 
-/// Internal helper: watch one graph's lattice events and forward them as OrchaEvents into `tx`.
+/// Internal helper: watch one graph's lattice events and forward them as `OrchaEvents` into `tx`.
 ///
 /// Used by `watch_graph_tree` to multiplex root + all child graphs into one channel.
 async fn watch_single_graph(
@@ -253,6 +252,14 @@ async fn watch_single_graph(
     pm: Arc<pm::Pm>,
     tx: tokio::sync::mpsc::UnboundedSender<OrchaEvent>,
 ) {
+    fn calc_pct(complete: usize, total: usize) -> Option<u32> {
+        if total == 0 {
+            None
+        } else {
+            Some((complete as f32 / total as f32 * 100.0) as u32)
+        }
+    }
+
     let graph = graph_runtime.open_graph(gid.clone());
     let node_to_ticket: HashMap<String, String> = pm
         .get_ticket_map(&gid)
@@ -264,14 +271,6 @@ async fn watch_single_graph(
 
     let total_nodes = graph.count_nodes().await.unwrap_or(0);
     let mut complete_nodes: usize = 0;
-
-    fn calc_pct(complete: usize, total: usize) -> Option<u32> {
-        if total == 0 {
-            None
-        } else {
-            Some((complete as f32 / total as f32 * 100.0) as u32)
-        }
-    }
 
     let event_stream = graph.watch(after_seq);
     tokio::pin!(event_stream);
@@ -321,7 +320,7 @@ async fn watch_single_graph(
                 error,
             } => Some(OrchaEvent::Failed {
                 session_id: graph_id,
-                error: format!("Node {} failed: {}", node_id, error),
+                error: format!("Node {node_id} failed: {error}"),
             }),
         };
         if let Some(e) = evt {
@@ -405,7 +404,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield CreateSessionResult::Err {
-                        message: format!("Failed to create session: {}", e),
+                        message: format!("Failed to create session: {e}"),
                     };
                 }
             }
@@ -430,7 +429,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield UpdateSessionStateResult::Err {
-                        message: format!("Failed to update state: {}", e),
+                        message: format!("Failed to update state: {e}"),
                     };
                 }
             }
@@ -452,7 +451,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield GetSessionResult::Err {
-                        message: format!("Session not found: {}", e),
+                        message: format!("Session not found: {e}"),
                     };
                 }
             }
@@ -461,7 +460,7 @@ impl<P: HubContext> Orcha<P> {
 
     /// Extract validation artifact from text
     ///
-    /// Scans text for {"orcha_validate": {...}} pattern and extracts test command
+    /// Scans text for {"`orcha_validate"`: {...}} pattern and extracts test command
     #[plexus_macros::method]
     async fn extract_validation(
         &self,
@@ -523,7 +522,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield IncrementRetryResult::Err {
-                        message: format!("Failed to increment retry: {}", e),
+                        message: format!("Failed to increment retry: {e}"),
                     };
                 }
             }
@@ -556,17 +555,17 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield DeleteSessionResult::Err {
-                        message: format!("Failed to delete session: {}", e),
+                        message: format!("Failed to delete session: {e}"),
                     };
                 }
             }
         }
     }
 
-    /// Run a task asynchronously - returns immediately with session_id
+    /// Run a task asynchronously - returns immediately with `session_id`
     ///
-    /// Like run_task but non-blocking. Returns the session_id immediately
-    /// and the task runs in the background. Use check_status or get_session
+    /// Like `run_task` but non-blocking. Returns the `session_id` immediately
+    /// and the task runs in the background. Use `check_status` or `get_session`
     /// to check on progress.
     #[plexus_macros::method]
     async fn run_task_async(
@@ -668,7 +667,7 @@ impl<P: HubContext> Orcha<P> {
         let claudecode = self.claudecode.clone();
         let arbor_storage = self.arbor_storage.clone();
         let storage = self.storage.clone();
-        let session_id = request.session_id.clone();
+        let session_id = request.session_id;
 
         stream! {
             // First, get the actual session state from storage
@@ -676,7 +675,7 @@ impl<P: HubContext> Orcha<P> {
                 Ok(info) => info,
                 Err(e) => {
                     yield CheckStatusResult::Err {
-                        message: format!("Session not found: {}", e),
+                        message: format!("Session not found: {e}"),
                     };
                     return;
                 }
@@ -689,7 +688,7 @@ impl<P: HubContext> Orcha<P> {
                     Ok(a) => a,
                     Err(e) => {
                         yield CheckStatusResult::Err {
-                            message: format!("Failed to list agents: {}", e),
+                            message: format!("Failed to list agents: {e}"),
                         };
                         return;
                     }
@@ -756,21 +755,21 @@ impl<P: HubContext> Orcha<P> {
                 SessionState::Idle => ("idle (not currently executing)".to_string(), None),
                 SessionState::Running { stream_id, sequence, active_agents, completed_agents, failed_agents } => {
                     let agent_info = if *active_agents > 0 || *completed_agents > 0 || *failed_agents > 0 {
-                        format!(" (agents: {} active, {} complete, {} failed)", active_agents, completed_agents, failed_agents)
+                        format!(" (agents: {active_agents} active, {completed_agents} complete, {failed_agents} failed)")
                     } else {
                         String::new()
                     };
-                    (format!("running (stream: {}, sequence: {}{})", stream_id, sequence, agent_info), Some(stream_id.clone()))
+                    (format!("running (stream: {stream_id}, sequence: {sequence}{agent_info})"), Some(stream_id.clone()))
                 }
                 SessionState::WaitingApproval { approval_id } => {
-                    (format!("waiting for approval (approval_id: {})", approval_id), None)
+                    (format!("waiting for approval (approval_id: {approval_id})"), None)
                 }
                 SessionState::Validating { test_command } => {
-                    (format!("validating with command: {}", test_command), None)
+                    (format!("validating with command: {test_command}"), None)
                 }
                 SessionState::Complete => ("completed successfully".to_string(), None),
                 SessionState::Failed { error } => {
-                    (format!("failed with error: {}", error), None)
+                    (format!("failed with error: {error}"), None)
                 }
             };
 
@@ -916,7 +915,7 @@ impl<P: HubContext> Orcha<P> {
 
     /// Spawn a new agent in an existing session (multi-agent mode)
     ///
-    /// Creates a new ClaudeCode session and tracks it as an agent within the orcha session.
+    /// Creates a new `ClaudeCode` session and tracks it as an agent within the orcha session.
     /// Can be called explicitly via API or by agents themselves requesting helpers.
     #[plexus_macros::method]
     async fn spawn_agent(
@@ -933,7 +932,7 @@ impl<P: HubContext> Orcha<P> {
                 Ok(s) => s,
                 Err(e) => {
                     yield SpawnAgentResult::Err {
-                        message: format!("Session not found: {}", e),
+                        message: format!("Session not found: {e}"),
                     };
                     return;
                 }
@@ -961,7 +960,7 @@ impl<P: HubContext> Orcha<P> {
             let create_stream = claudecode.create(
                 cc_session_name.clone(),
                 "/workspace".to_string(),  // TODO: Get from session
-                model.clone(),
+                model,
                 None,
                 Some(true), // Loopback enabled
                 Some(agent_session_id), // Track agent under parent session
@@ -1017,7 +1016,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield SpawnAgentResult::Err {
-                        message: format!("Failed to create agent: {}", e),
+                        message: format!("Failed to create agent: {e}"),
                     };
                 }
             }
@@ -1039,7 +1038,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield ListAgentsResult::Err {
-                        message: format!("Failed to list agents: {}", e),
+                        message: format!("Failed to list agents: {e}"),
                     };
                 }
             }
@@ -1061,7 +1060,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield GetAgentResult::Err {
-                        message: format!("Agent not found: {}", e),
+                        message: format!("Agent not found: {e}"),
                     };
                 }
             }
@@ -1071,7 +1070,7 @@ impl<P: HubContext> Orcha<P> {
     /// List pending approval requests for a session
     ///
     /// Returns all approval requests awaiting manual approval.
-    /// Only relevant when auto_approve is disabled.
+    /// Only relevant when `auto_approve` is disabled.
     #[plexus_macros::method]
     async fn list_pending_approvals(
         &self,
@@ -1091,9 +1090,7 @@ impl<P: HubContext> Orcha<P> {
                             tool_name: approval.tool_name,
                             tool_use_id: approval.tool_use_id,
                             tool_input: approval.input,
-                            created_at: chrono::DateTime::from_timestamp(approval.created_at, 0)
-                                .map(|dt| dt.to_rfc3339())
-                                .unwrap_or_else(|| approval.created_at.to_string()),
+                            created_at: chrono::DateTime::from_timestamp(approval.created_at, 0).map_or_else(|| approval.created_at.to_string(), |dt| dt.to_rfc3339()),
                         })
                         .collect();
 
@@ -1103,7 +1100,7 @@ impl<P: HubContext> Orcha<P> {
                 }
                 Err(e) => {
                     yield ListApprovalsResult::Err {
-                        message: format!("Failed to list pending approvals: {}", e),
+                        message: format!("Failed to list pending approvals: {e}"),
                     };
                 }
             }
@@ -1113,7 +1110,7 @@ impl<P: HubContext> Orcha<P> {
     /// Approve a pending request
     ///
     /// Approves a tool use request and unblocks the waiting agent.
-    /// The approval_id comes from list_pending_approvals.
+    /// The `approval_id` comes from `list_pending_approvals`.
     #[plexus_macros::method]
     async fn approve_request(
         &self,
@@ -1121,7 +1118,7 @@ impl<P: HubContext> Orcha<P> {
     ) -> impl Stream<Item = ApprovalActionResult> + Send + 'static {
         let loopback = self.loopback.clone();
         let approval_id = request.approval_id.clone();
-        let message = request.message.clone();
+        let message = request.message;
 
         stream! {
             match uuid::Uuid::parse_str(&approval_id) {
@@ -1138,14 +1135,14 @@ impl<P: HubContext> Orcha<P> {
                         }
                         Err(e) => {
                             yield ApprovalActionResult::Err {
-                                message: format!("Failed to approve: {}", e),
+                                message: format!("Failed to approve: {e}"),
                             };
                         }
                     }
                 }
                 Err(_) => {
                     yield ApprovalActionResult::Err {
-                        message: format!("Invalid approval_id format: {}", approval_id),
+                        message: format!("Invalid approval_id format: {approval_id}"),
                     };
                 }
             }
@@ -1163,7 +1160,7 @@ impl<P: HubContext> Orcha<P> {
     ) -> impl Stream<Item = ApprovalActionResult> + Send + 'static {
         let loopback = self.loopback.clone();
         let approval_id = request.approval_id.clone();
-        let reason = request.reason.clone();
+        let reason = request.reason;
 
         stream! {
             match uuid::Uuid::parse_str(&approval_id) {
@@ -1180,14 +1177,14 @@ impl<P: HubContext> Orcha<P> {
                         }
                         Err(e) => {
                             yield ApprovalActionResult::Err {
-                                message: format!("Failed to deny: {}", e),
+                                message: format!("Failed to deny: {e}"),
                             };
                         }
                     }
                 }
                 Err(_) => {
                     yield ApprovalActionResult::Err {
-                        message: format!("Invalid approval_id format: {}", approval_id),
+                        message: format!("Invalid approval_id format: {approval_id}"),
                     };
                 }
             }
@@ -1230,9 +1227,7 @@ impl<P: HubContext> Orcha<P> {
                                 continue;
                             }
                             seen_ids.insert(id_str);
-                            let created_at = chrono::DateTime::from_timestamp(approval.created_at, 0)
-                                .map(|dt| dt.to_rfc3339())
-                                .unwrap_or_else(|| approval.created_at.to_string());
+                            let created_at = chrono::DateTime::from_timestamp(approval.created_at, 0).map_or_else(|| approval.created_at.to_string(), |dt| dt.to_rfc3339());
                             yield OrchaEvent::ApprovalPending {
                                 approval_id: approval.id.to_string(),
                                 graph_id: graph_id.clone(),
@@ -1256,7 +1251,6 @@ impl<P: HubContext> Orcha<P> {
                 tokio::select! {
                     _ = notifier.notified() => {
                         // New approval arrived — loop to re-list and yield
-                        continue;
                     }
                     _ = tokio::time::sleep(remaining) => {
                         // Timeout reached — close stream
@@ -1270,11 +1264,11 @@ impl<P: HubContext> Orcha<P> {
     /// Execute a lattice graph — dispatches nodes by type using Orcha's execution logic.
     ///
     /// Node types:
-    /// - `"task"`: run a ClaudeCode session with `spec.data.task` as the prompt
+    /// - `"task"`: run a `ClaudeCode` session with `spec.data.task` as the prompt
     /// - `"synthesize"`: like task, with optional prior-work context from `spec.handle`
     /// - `"validate"`: run a shell command from `spec.data.command`
     ///
-    /// Streams OrchaEvent progress events until the graph completes or fails.
+    /// Streams `OrchaEvent` progress events until the graph completes or fails.
     #[plexus_macros::method(params(
         graph_id = "ID of the lattice graph to execute",
         model = "Model for task nodes: opus, sonnet, haiku (default: sonnet)",
@@ -1380,16 +1374,16 @@ impl<P: HubContext> Orcha<P> {
                 }
             };
 
-            let ticket_map: std::collections::HashMap<String, String> =
-                [("plan".to_string(), node_id.clone())].into_iter().collect();
+            let ticket_map =
+                std::collections::HashMap::from([("plan".to_string(), node_id.clone())]);
             let _ = pm.save_ticket_map(&graph_id, &ticket_map).await;
             let _ = pm.save_ticket_source(&graph_id, &task).await;
 
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
             cancel_registry.lock().await.insert(graph_id.clone(), cancel_tx);
 
-            let node_to_ticket: std::collections::HashMap<String, String> =
-                [(node_id, "plan".to_string())].into_iter().collect();
+            let node_to_ticket =
+                std::collections::HashMap::from([(node_id, "plan".to_string())]);
             let execution = graph_runner::run_graph_execution(
                 graph, claudecode, arbor, lb, pm,
                 graph_runtime, cancel_registry.clone(),
@@ -1546,7 +1540,7 @@ impl<P: HubContext> Orcha<P> {
                     crate::activations::lattice::LatticeEvent::GraphFailed { graph_id, node_id, error } => {
                         yield OrchaEvent::Failed {
                             session_id: graph_id,
-                            error: format!("Node {} failed: {}", node_id, error),
+                            error: format!("Node {node_id} failed: {error}"),
                         };
                         return;
                     }
@@ -1575,7 +1569,7 @@ impl<P: HubContext> Orcha<P> {
     ) -> impl Stream<Item = OrchaEvent> + Send + 'static {
         let graph_runtime = self.graph_runtime.clone();
         let pm = self.pm.clone();
-        let root_id = graph_id.clone();
+        let root_id = graph_id;
         stream! {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OrchaEvent>();
             let known_ids: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
@@ -1682,7 +1676,7 @@ impl<P: HubContext> Orcha<P> {
         }
     }
 
-    /// Add a synthesize node — like task, with prior_work context prepended from input tokens.
+    /// Add a synthesize node — like task, with `prior_work` context prepended from input tokens.
     #[plexus_macros::method(params(
         graph_id = "Graph to add the node to",
         task = "Synthesis prompt for Claude"
@@ -1741,7 +1735,7 @@ impl<P: HubContext> Orcha<P> {
         }
     }
 
-    /// Add a SubGraph node — when dispatched, runs the child graph to completion.
+    /// Add a `SubGraph` node — when dispatched, runs the child graph to completion.
     ///
     /// On child success, the parent node receives `{"child_graph_id": "..."}` as output.
     /// On child failure, the parent node is failed (error edge fires if present).
@@ -1786,7 +1780,7 @@ impl<P: HubContext> Orcha<P> {
 
     /// Compile a ticket file and build the lattice graph without executing it.
     ///
-    /// Returns the graph_id.  Use `orcha.run_graph(graph_id)` to execute it
+    /// Returns the `graph_id`.  Use `orcha.run_graph(graph_id)` to execute it
     /// separately, or `orcha.run_tickets` to build and run in one call.
     #[plexus_macros::method(params(
         tickets = "Raw ticket file content",
@@ -1804,7 +1798,7 @@ impl<P: HubContext> Orcha<P> {
                 Ok(c) => c,
                 Err(e) => {
                     yield OrchaCreateGraphResult::Err {
-                        message: format!("Ticket compile error: {}", e),
+                        message: format!("Ticket compile error: {e}"),
                     };
                     return;
                 }
@@ -1859,7 +1853,7 @@ impl<P: HubContext> Orcha<P> {
                 Err(e) => {
                     yield OrchaEvent::Failed {
                         session_id: "tickets".to_string(),
-                        error: format!("Ticket compile error: {}", e),
+                        error: format!("Ticket compile error: {e}"),
                     };
                     return;
                 }
@@ -1905,9 +1899,8 @@ impl<P: HubContext> Orcha<P> {
                 yield OrchaEvent::Failed {
                     session_id: "tickets".to_string(),
                     error: format!(
-                        "Working directory does not exist: '{}'. \
-                         Create it before running tickets or pass an existing path.",
-                        wd
+                        "Working directory does not exist: '{wd}'. \
+                         Create it before running tickets or pass an existing path."
                     ),
                 };
                 return;
@@ -1992,7 +1985,7 @@ impl<P: HubContext> Orcha<P> {
                 Err(e) => {
                     yield OrchaEvent::Failed {
                         session_id: "tickets".to_string(),
-                        error: format!("Ticket compile error: {}", e),
+                        error: format!("Ticket compile error: {e}"),
                     };
                     return;
                 }
@@ -2007,9 +2000,8 @@ impl<P: HubContext> Orcha<P> {
                 yield OrchaEvent::Failed {
                     session_id: "tickets".to_string(),
                     error: format!(
-                        "Working directory does not exist: '{}'. \
-                         Create it before running tickets or pass an existing path.",
-                        wd
+                        "Working directory does not exist: '{wd}'. \
+                         Create it before running tickets or pass an existing path."
                     ),
                 };
                 return;
@@ -2101,7 +2093,7 @@ impl<P: HubContext> Orcha<P> {
     /// Files are joined with a blank line separator; the compiler ignores preamble and
     /// section boundaries so cross-file `blocked_by` references work correctly.
     ///
-    /// Streams OrchaEvents until the graph completes or fails.
+    /// Streams `OrchaEvents` until the graph completes or fails.
     #[plexus_macros::method(params(
         paths = "Absolute paths to ticket markdown files, e.g. [\"/workspace/plans/batch.tickets.md\"]",
         metadata = "Arbitrary JSON metadata attached to the graph",
@@ -2130,7 +2122,7 @@ impl<P: HubContext> Orcha<P> {
                     Err(e) => {
                         yield OrchaEvent::Failed {
                             session_id: "tickets".to_string(),
-                            error: format!("Failed to read '{}': {}", path, e),
+                            error: format!("Failed to read '{path}': {e}"),
                         };
                         return;
                     }
@@ -2143,7 +2135,7 @@ impl<P: HubContext> Orcha<P> {
                 Err(e) => {
                     yield OrchaEvent::Failed {
                         session_id: "tickets".to_string(),
-                        error: format!("Ticket compile error: {}", e),
+                        error: format!("Ticket compile error: {e}"),
                     };
                     return;
                 }
@@ -2177,7 +2169,7 @@ impl<P: HubContext> Orcha<P> {
             if !std::path::Path::new(&wd).is_dir() {
                 yield OrchaEvent::Failed {
                     session_id: "tickets".to_string(),
-                    error: format!("Working directory does not exist: '{}'", wd),
+                    error: format!("Working directory does not exist: '{wd}'"),
                 };
                 return;
             }
@@ -2229,7 +2221,7 @@ impl<P: HubContext> Orcha<P> {
                     Err(e) => {
                         yield OrchaEvent::Failed {
                             session_id: "tickets".to_string(),
-                            error: format!("Failed to read '{}': {}", path, e),
+                            error: format!("Failed to read '{path}': {e}"),
                         };
                         return;
                     }
@@ -2242,7 +2234,7 @@ impl<P: HubContext> Orcha<P> {
                 Err(e) => {
                     yield OrchaEvent::Failed {
                         session_id: "tickets".to_string(),
-                        error: format!("Ticket compile error: {}", e),
+                        error: format!("Ticket compile error: {e}"),
                     };
                     return;
                 }
@@ -2276,7 +2268,7 @@ impl<P: HubContext> Orcha<P> {
             if !std::path::Path::new(&wd).is_dir() {
                 yield OrchaEvent::Failed {
                     session_id: "tickets".to_string(),
-                    error: format!("Working directory does not exist: '{}'", wd),
+                    error: format!("Working directory does not exist: '{wd}'"),
                 };
                 return;
             }
@@ -2311,7 +2303,7 @@ impl<P: HubContext> Orcha<P> {
     /// Build and execute a graph from an inline definition.
     ///
     /// Nodes use caller-supplied string ids; edges reference those ids.
-    /// Streams OrchaEvents. The graph_id appears in progress and complete/failed events.
+    /// Streams `OrchaEvents`. The `graph_id` appears in progress and complete/failed events.
     #[plexus_macros::method(params(
         metadata = "Arbitrary JSON metadata attached to the graph",
         model = "Model for task nodes: opus, sonnet, haiku (default: sonnet)",
@@ -2363,7 +2355,7 @@ async fn build_graph_from_definition(
     let graph = graph_runtime
         .create_graph(metadata)
         .await
-        .map_err(|e| format!("Failed to create graph: {}", e))?;
+        .map_err(|e| format!("Failed to create graph: {e}"))?;
     let graph_id = graph.graph_id.clone();
 
     let mut id_map: HashMap<String, String> = HashMap::new();
@@ -2378,7 +2370,7 @@ async fn build_graph_from_definition(
         };
         let lattice_id = match result {
             Ok(lid) => lid,
-            Err(e) => return Err(format!("Failed to add node '{}': {}", id, e)),
+            Err(e) => return Err(format!("Failed to add node '{id}': {e}")),
         };
         id_map.insert(id, lattice_id);
     }
@@ -2386,16 +2378,16 @@ async fn build_graph_from_definition(
     for OrchaEdgeDef { from, to } in edges {
         let dep_id = id_map
             .get(&from)
-            .ok_or_else(|| format!("Unknown node id in edge.from: '{}'", from))?
+            .ok_or_else(|| format!("Unknown node id in edge.from: '{from}'"))?
             .clone();
         let node_id = id_map
             .get(&to)
-            .ok_or_else(|| format!("Unknown node id in edge.to: '{}'", to))?
+            .ok_or_else(|| format!("Unknown node id in edge.to: '{to}'"))?
             .clone();
         graph
             .depends_on(&node_id, &dep_id)
             .await
-            .map_err(|e| format!("Failed to add edge {} → {}: {}", from, to, e))?;
+            .map_err(|e| format!("Failed to add edge {from} → {to}: {e}"))?;
     }
 
     Ok((graph_id, id_map))
@@ -2431,7 +2423,7 @@ fn build_and_run_graph_definition<P: HubContext + 'static>(
         };
 
         yield OrchaEvent::Progress {
-            message: format!("Graph {} ready, starting execution", graph_id),
+            message: format!("Graph {graph_id} ready, starting execution"),
             percentage: None,
         };
 
@@ -2508,12 +2500,12 @@ async fn run_validation_test(artifact: &ValidationArtifact) -> ValidationResult 
         Ok(output) => ValidationResult {
             success: output.status.success(),
             output: String::from_utf8_lossy(&output.stdout).to_string()
-                + &String::from_utf8_lossy(&output.stderr).to_string(),
+                + String::from_utf8_lossy(&output.stderr).as_ref(),
             exit_code: output.status.code(),
         },
         Err(e) => ValidationResult {
             success: false,
-            output: format!("Failed to execute command: {}", e),
+            output: format!("Failed to execute command: {e}"),
             exit_code: None,
         },
     }
@@ -2524,11 +2516,6 @@ async fn run_validation_test(artifact: &ValidationArtifact) -> ValidationResult 
 /// Converts the JSON-based arbor tree structure into a human-readable conversation format
 fn format_conversation_from_tree(tree: &crate::activations::arbor::Tree) -> String {
     use crate::activations::arbor::NodeType;
-
-    let mut output = String::new();
-    let mut current_role = String::new();
-    let mut message_text = String::new();
-    let mut tool_uses = Vec::new();
 
     // Walk the tree in order
     fn walk_nodes(
@@ -2568,7 +2555,7 @@ fn format_conversation_from_tree(tree: &crate::activations::arbor::Tree) -> Stri
                             }
                             "content_tool_use" => {
                                 if let Some(name) = event.get("name").and_then(|v| v.as_str()) {
-                                    let mut tool_str = format!("[Tool: {}]", name);
+                                    let mut tool_str = format!("[Tool: {name}]");
                                     if let Some(input) = event.get("input") {
                                         if let Ok(input_str) = serde_json::to_string_pretty(input) {
                                             // Limit tool input to 200 chars
@@ -2577,7 +2564,7 @@ fn format_conversation_from_tree(tree: &crate::activations::arbor::Tree) -> Stri
                                             } else {
                                                 input_str
                                             };
-                                            tool_str.push_str(&format!(" {}", trimmed));
+                                            tool_str.push_str(&format!(" {trimmed}"));
                                         }
                                     }
                                     tool_uses.push(tool_str);
@@ -2603,17 +2590,22 @@ fn format_conversation_from_tree(tree: &crate::activations::arbor::Tree) -> Stri
         tool_uses: &mut Vec<String>,
     ) {
         if !current_role.is_empty() && (!message_text.is_empty() || !tool_uses.is_empty()) {
-            output.push_str(&format!("{}:\n", current_role));
+            output.push_str(&format!("{current_role}:\n"));
             if !message_text.is_empty() {
                 output.push_str(message_text);
-                output.push_str("\n");
+                output.push('\n');
             }
             for tool in tool_uses.drain(..) {
-                output.push_str(&format!("  {}\n", tool));
+                output.push_str(&format!("  {tool}\n"));
             }
-            output.push_str("\n");
+            output.push('\n');
         }
     }
+
+    let mut output = String::new();
+    let mut current_role = String::new();
+    let mut message_text = String::new();
+    let mut tool_uses = Vec::new();
 
     // Start walking from root
     walk_nodes(tree, &tree.root, &mut output, &mut current_role, &mut message_text, &mut tool_uses);
@@ -2636,38 +2628,34 @@ async fn save_status_summary_to_arbor(
     use crate::activations::arbor::TreeId;
 
     // Generate deterministic tree ID from path: orcha.<session-id>.monitor
-    let tree_path = format!("orcha.{}.monitor", session_id);
+    let tree_path = format!("orcha.{session_id}.monitor");
     let tree_uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, tree_path.as_bytes());
     let monitor_tree_id = TreeId::from(tree_uuid);
 
     // Try to get existing tree, create if it doesn't exist
-    let tree = match arbor_storage.tree_get(&monitor_tree_id).await {
-        Ok(tree) => tree,
-        Err(_) => {
-            // Tree doesn't exist, create it with our deterministic ID
-            let metadata = serde_json::json!({
-                "type": "orcha_monitor",
-                "session_id": session_id,
-                "tree_path": tree_path
-            });
+    let tree = if let Ok(tree) = arbor_storage.tree_get(&monitor_tree_id).await { tree } else {
+        // Tree doesn't exist, create it with our deterministic ID
+        let metadata = serde_json::json!({
+            "type": "orcha_monitor",
+            "session_id": session_id,
+            "tree_path": tree_path
+        });
 
-            let created_tree_id = arbor_storage.tree_create_with_id(
-                Some(monitor_tree_id),
-                Some(metadata),
-                "orcha",
-            ).await.map_err(|e| e.to_string())?;
+        let created_tree_id = arbor_storage.tree_create_with_id(
+            Some(monitor_tree_id),
+            Some(metadata),
+            "orcha",
+        ).await.map_err(|e| e.to_string())?;
 
-            arbor_storage.tree_get(&created_tree_id).await
-                .map_err(|e| e.to_string())?
-        }
+        arbor_storage.tree_get(&created_tree_id).await
+            .map_err(|e| e.to_string())?
     };
 
     // Find the latest summary node to append to, or use root
     let parent = tree.nodes.values()
         .filter(|n| matches!(n.data, crate::activations::arbor::NodeType::Text { .. }))
         .max_by_key(|n| n.created_at)
-        .map(|n| n.id)
-        .unwrap_or(tree.root);
+        .map_or(tree.root, |n| n.id);
 
     // Append summary as a text node with timestamp
     let timestamp = chrono::Utc::now().to_rfc3339();
@@ -2697,10 +2685,10 @@ async fn generate_agent_summary<P: HubContext>(
 
     // Get conversation tree for this agent's ClaudeCode session
     let cc_session = claudecode.storage.session_get_by_name(&agent.claudecode_session_id).await
-        .map_err(|e| format!("Failed to get CC session: {}", e))?;
+        .map_err(|e| format!("Failed to get CC session: {e}"))?;
 
     let tree = arbor_storage.tree_get(&cc_session.head.tree_id).await
-        .map_err(|e| format!("Failed to get tree: {}", e))?;
+        .map_err(|e| format!("Failed to get tree: {e}"))?;
 
     let conversation = format_conversation_from_tree(&tree);
 

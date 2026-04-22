@@ -1,6 +1,6 @@
 //! MCP server using rmcp with Plexus backend
 //!
-//! Run with: cargo run --example rmcp_mcp_server
+//! Run with: cargo run --example `rmcp_mcp_server`
 //!
 //! Test with curl:
 //! ```bash

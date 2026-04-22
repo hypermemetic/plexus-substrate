@@ -26,7 +26,7 @@ type CancelRegistry = Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::watch:
 ///
 /// Returns a stream of `OrchaEvent` for monitoring.
 /// The stream closes when the graph reaches `GraphDone` or `GraphFailed`.
-pub fn run_graph_execution<P: HubContext + 'static>(
+pub(super) fn run_graph_execution<P: HubContext + 'static>(
     graph: Arc<OrchaGraph>,
     claudecode: Arc<ClaudeCode<P>>,
     arbor_storage: Arc<ArborStorage>,
@@ -154,7 +154,7 @@ pub fn run_graph_execution<P: HubContext + 'static>(
                         LatticeEvent::GraphFailed { graph_id, node_id, error } => {
                             yield OrchaEvent::Failed {
                                 session_id: graph_id,
-                                error: format!("Node {} failed: {}", node_id, error),
+                                error: format!("Node {node_id} failed: {error}"),
                             };
                             return;
                         }
@@ -200,7 +200,7 @@ async fn dispatch_node<P: HubContext + 'static>(
     };
 
     let kind: OrchaNodeKind = serde_json::from_value(data.clone())
-        .map_err(|e| format!("Node data is not a valid OrchaNodeKind: {}", e))?;
+        .map_err(|e| format!("Node data is not a valid OrchaNodeKind: {e}"))?;
 
     // Fetch and resolve input tokens (replaces old handle_context mechanism)
     let resolved_inputs = graph.get_resolved_inputs(node_id, &arbor).await?;
@@ -226,7 +226,7 @@ async fn dispatch_node<P: HubContext + 'static>(
 
 /// Dispatch a "review" node — human-in-the-loop gate.
 ///
-/// Creates a loopback approval record keyed on the graph_id, emits an
+/// Creates a loopback approval record keyed on the `graph_id`, emits an
 /// `ApprovalPending` event, then polls every second until the approval is
 /// resolved.  On approval returns `Token::ok()`; on denial returns an error.
 async fn dispatch_review(
@@ -243,7 +243,7 @@ async fn dispatch_review(
     let record = loopback_storage
         .create_approval(graph_id, "review", &tool_use_id, &input)
         .await
-        .map_err(|e| format!("Failed to create review approval: {}", e))?;
+        .map_err(|e| format!("Failed to create review approval: {e}"))?;
 
     let approval_id = record.id;
 
@@ -273,7 +273,7 @@ async fn dispatch_review(
                             }
                             ApprovalStatus::Denied => {
                                 let reason = r.response_message.unwrap_or_default();
-                                return Err(format!("Review denied: {}", reason));
+                                return Err(format!("Review denied: {reason}"));
                             }
                             _ => {} // still pending or timed out — keep polling
                         }
@@ -287,7 +287,7 @@ async fn dispatch_review(
     }
 }
 
-/// Dispatch a "task" or "synthesize" node — creates a ClaudeCode session and runs the prompt.
+/// Dispatch a "task" or "synthesize" node — creates a `ClaudeCode` session and runs the prompt.
 ///
 /// Any resolved input tokens with `{"text": "..."}` data are concatenated as `<prior_work>`.
 /// Loopback is enabled so tool-use approval requests are routed through the orcha approval API,
@@ -313,7 +313,7 @@ async fn dispatch_task<P: HubContext + 'static>(
             t.data.as_ref()
                 .and_then(|v| v.get("text"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
         })
         .collect();
 
@@ -328,9 +328,8 @@ async fn dispatch_task<P: HubContext + 'static>(
     // terse error that gives no hint of the root cause.
     if !std::path::Path::new(&working_directory).is_dir() {
         return Err(format!(
-            "Working directory does not exist: '{}'. \
-             Create it before running tickets or pass an existing path.",
-            working_directory
+            "Working directory does not exist: '{working_directory}'. \
+             Create it before running tickets or pass an existing path."
         ));
     }
 
@@ -340,7 +339,7 @@ async fn dispatch_task<P: HubContext + 'static>(
     }
 
     // Log the prompt and invocation context — seq 0.
-    let model_str = format!("{:?}", model).to_lowercase();
+    let model_str = format!("{model:?}").to_lowercase();
     pm.log_node_event(
         graph_id, node_id, ticket_id.as_deref(), 0, "prompt",
         serde_json::json!({
@@ -353,7 +352,7 @@ async fn dispatch_task<P: HubContext + 'static>(
 
     let mut log_seq: i64 = 1;
 
-    let session_name = format!("lattice-node-{}", node_id);
+    let session_name = format!("lattice-node-{node_id}");
 
     // Spawn background auto-approver: watches loopback approvals for this graph session
     // and immediately approves them so Claude can proceed without manual intervention.
@@ -383,12 +382,12 @@ async fn dispatch_task<P: HubContext + 'static>(
         .await;
     tokio::pin!(create_stream);
 
-    while let Some(result) = create_stream.next().await {
+    if let Some(result) = create_stream.next().await {
         match result {
-            CreateResult::Ok { .. } => break,
+            CreateResult::Ok { .. } => {}
             CreateResult::Err { message } => {
                 let _ = approver_stop_tx.send(());
-                return Err(format!("Failed to create claudecode session: {}", message));
+                return Err(format!("Failed to create claudecode session: {message}"));
             }
         }
     }
@@ -557,7 +556,7 @@ async fn dispatch_synthesize<P: HubContext + 'static>(
                 }
                 _ => continue,
             };
-            lines.push(format!("- {}", task_text));
+            lines.push(format!("- {task_text}"));
         }
         if lines.is_empty() {
             String::new()
@@ -569,7 +568,7 @@ async fn dispatch_synthesize<P: HubContext + 'static>(
         }
     };
 
-    let prompt = format!("{}{}", join_context, task);
+    let prompt = format!("{join_context}{task}");
     dispatch_task(claudecode, loopback_storage, pm, prompt, resolved_inputs, node_id, model, working_directory, &graph.graph_id, output_tx, cancel_rx, ticket_id).await
 }
 
@@ -604,7 +603,7 @@ async fn dispatch_subgraph<P: HubContext + 'static>(
                 ))));
             }
             OrchaEvent::Failed { error, .. } => {
-                return Err(format!("Child graph failed: {}", error));
+                return Err(format!("Child graph failed: {error}"));
             }
             _ => {}
         }
@@ -662,9 +661,9 @@ async fn dispatch_plan<P: HubContext + 'static>(
                 .as_ref()
                 .and_then(|p| match p {
                     TokenPayload::Data { value } => {
-                        value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
+                        value.get("text").and_then(|v| v.as_str()).map(std::string::ToString::to_string)
                     }
-                    _ => None,
+                    TokenPayload::Handle(_) => None,
                 })
                 .ok_or_else(|| "Plan task produced no text output".to_string())?
         }
@@ -673,12 +672,12 @@ async fn dispatch_plan<P: HubContext + 'static>(
 
     // Phase 2 — compile ticket source
     let compiled = crate::activations::orcha::ticket_compiler::compile_tickets(&ticket_source)
-        .map_err(|e| format!("Plan ticket compile error: {}", e))?;
+        .map_err(|e| format!("Plan ticket compile error: {e}"))?;
 
     // Phase 3 — build child graph
     let child_metadata = serde_json::json!({
         "_plexus_run_config": {
-            "model": format!("{:?}", model).to_lowercase(),
+            "model": format!("{model:?}").to_lowercase(),
             "working_directory": working_directory,
         },
         "parent_graph_id": graph.graph_id,
@@ -696,10 +695,10 @@ async fn dispatch_plan<P: HubContext + 'static>(
 
     pm.save_ticket_map(&child_graph_id, &id_map)
         .await
-        .map_err(|e| format!("Failed to save ticket map: {}", e))?;
+        .map_err(|e| format!("Failed to save ticket map: {e}"))?;
     pm.save_ticket_source(&child_graph_id, &ticket_source)
         .await
-        .map_err(|e| format!("Failed to save ticket source: {}", e))?;
+        .map_err(|e| format!("Failed to save ticket source: {e}"))?;
 
     // Phase 4 — execute child graph
     // Register a cancel token so the child can be cancelled via cancel_graph.
@@ -733,7 +732,7 @@ async fn dispatch_plan<P: HubContext + 'static>(
             }
             OrchaEvent::Failed { error, .. } => {
                 cancel_registry.lock().await.remove(&child_graph_id);
-                return Err(format!("Plan child graph failed: {}", error));
+                return Err(format!("Plan child graph failed: {error}"));
             }
             evt => {
                 let _ = output_tx.send(evt);
@@ -758,11 +757,11 @@ async fn dispatch_validate(
         .current_dir(&cwd)
         .output()
         .await
-        .map_err(|e| format!("Failed to run validate command: {}", e))?;
+        .map_err(|e| format!("Failed to run validate command: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = format!("{}{}", stdout, stderr).trim().to_string();
+    let combined = format!("{stdout}{stderr}").trim().to_string();
 
     if output.status.success() {
         Ok(Some(NodeOutput::Single(Token::ok())))
@@ -795,44 +794,41 @@ async fn find_upstream_tasks(graph: &OrchaGraph, start_id: &str) -> Vec<String> 
             continue;
         }
         let Ok(spec) = graph.get_node_spec(&node_id).await else { continue };
-        match spec {
-            NodeSpec::Task { data, .. } => {
-                let Ok(kind) = serde_json::from_value::<OrchaNodeKind>(data) else { continue };
-                match kind {
-                    OrchaNodeKind::Task { .. } | OrchaNodeKind::Synthesize { .. } => {
-                        tasks.push(node_id);
-                        // Stop here — don't traverse further up through a task
-                    }
-                    // Validate/Review node in disguise — keep traversing
-                    _ => {
-                        let preds = graph.get_inbound_node_ids(&node_id).await.unwrap_or_default();
-                        queue.extend(preds);
-                    }
+        if let NodeSpec::Task { data, .. } = spec {
+            let Ok(kind) = serde_json::from_value::<OrchaNodeKind>(data) else { continue };
+            match kind {
+                OrchaNodeKind::Task { .. } | OrchaNodeKind::Synthesize { .. } => {
+                    tasks.push(node_id);
+                    // Stop here — don't traverse further up through a task
+                }
+                // Validate/Review node in disguise — keep traversing
+                _ => {
+                    let preds = graph.get_inbound_node_ids(&node_id).await.unwrap_or_default();
+                    queue.extend(preds);
                 }
             }
+        } else {
             // Gather / Scatter / SubGraph — engine-internal, traverse through
-            _ => {
-                let preds = graph.get_inbound_node_ids(&node_id).await.unwrap_or_default();
-                queue.extend(preds);
-            }
+            let preds = graph.get_inbound_node_ids(&node_id).await.unwrap_or_default();
+            queue.extend(preds);
         }
     }
 
     tasks
 }
 
-/// Extract the `{"text": "..."}` string from a NodeOutput, if present.
+/// Extract the `{"text": "..."}` string from a `NodeOutput`, if present.
 fn output_text(output: &NodeOutput) -> Option<String> {
     if let NodeOutput::Single(token) = output {
         if let Some(TokenPayload::Data { value }) = &token.payload {
-            return value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string());
+            return value.get("text").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
         }
     }
     None
 }
 
 fn is_empty_output(output: &NodeOutput) -> bool {
-    output_text(output).map(|t| t.is_empty()).unwrap_or(true)
+    output_text(output).is_none_or(|t| t.is_empty())
 }
 
 async fn dispatch_task_with_retry<P: HubContext + 'static>(
@@ -870,7 +866,7 @@ async fn dispatch_task_with_retry<P: HubContext + 'static>(
             ticket_id.clone(),
         ).await {
             Ok(output) => {
-                let empty = output.as_ref().map(|o| is_empty_output(o)).unwrap_or(true);
+                let empty = output.as_ref().is_none_or(is_empty_output);
                 if !empty {
                     return Ok(output);
                 }
@@ -923,7 +919,7 @@ async fn dispatch_synthesize_with_retry<P: HubContext + 'static>(
             ticket_id.clone(),
         ).await {
             Ok(output) => {
-                let empty = output.as_ref().map(|o| is_empty_output(o)).unwrap_or(true);
+                let empty = output.as_ref().is_none_or(is_empty_output);
                 if !empty {
                     return Ok(output);
                 }
@@ -997,8 +993,7 @@ async fn dispatch_validate_with_retry<P: HubContext + 'static>(
             });
             if task_ids.is_empty() {
                 return Err(format!(
-                    "Validation failed with no upstream task to retry: {}",
-                    err
+                    "Validation failed with no upstream task to retry: {err}"
                 ));
             }
 
@@ -1026,16 +1021,13 @@ async fn dispatch_validate_with_retry<P: HubContext + 'static>(
                      </validation_error>"
                 );
 
-                match dispatch_task(
+                if let Ok(Some(ref output)) = dispatch_task(
                     claudecode.clone(), loopback_storage.clone(), pm.clone(), retry_prompt, resolved,
                     tid, model, working_directory.clone(), &graph.graph_id, output_tx.clone(), cancel_rx.clone(), None,
                 ).await {
-                    Ok(Some(ref output)) => {
-                        if let Some(text) = output_text(output) {
-                            task_outputs.insert(tid.clone(), text);
-                        }
+                    if let Some(text) = output_text(output) {
+                        task_outputs.insert(tid.clone(), text);
                     }
-                    _ => {}
                 }
             }
         }
@@ -1060,8 +1052,7 @@ async fn dispatch_validate_with_retry<P: HubContext + 'static>(
             Err(e) => {
                 if attempt >= max_retries {
                     return Err(format!(
-                        "Validation failed after {} retries. Last error: {}",
-                        max_retries, e
+                        "Validation failed after {max_retries} retries. Last error: {e}"
                     ));
                 }
                 error_context = Some(e);

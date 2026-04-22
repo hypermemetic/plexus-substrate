@@ -92,7 +92,7 @@ pub struct LoopbackConfig {
     pub timeout_secs: u64,
 }
 
-fn default_timeout() -> u64 { 300 }
+const fn default_timeout() -> u64 { 300 }
 
 // Result types for hub methods
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

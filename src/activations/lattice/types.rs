@@ -10,19 +10,16 @@ pub type NodeId = String;
 
 /// Token color — the routing discriminant (Petri net "color").
 /// Ok/Error are lattice primitives; Named is application vocabulary.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TokenColor {
+    #[default]
     Ok,
     Error,
     Named { name: String },
 }
 
-impl Default for TokenColor {
-    fn default() -> Self {
-        TokenColor::Ok
-    }
-}
 
 /// Token payload — data OR a handle, never both.
 /// A token can also carry no payload (color-only signal for pure routing).
@@ -43,18 +40,18 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn ok() -> Self {
+    pub const fn ok() -> Self {
         Self { color: TokenColor::Ok, payload: None }
     }
 
-    pub fn ok_data(data: Value) -> Self {
+    pub const fn ok_data(data: Value) -> Self {
         Self {
             color: TokenColor::Ok,
             payload: Some(TokenPayload::Data { value: data }),
         }
     }
 
-    pub fn ok_handle(handle: Handle) -> Self {
+    pub const fn ok_handle(handle: Handle) -> Self {
         Self {
             color: TokenColor::Ok,
             payload: Some(TokenPayload::Handle(handle)),
@@ -120,10 +117,10 @@ pub enum GatherStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeSpec {
-    /// Caller-executed: engine emits NodeReady, caller drives and reports output.
+    /// Caller-executed: engine emits `NodeReady`, caller drives and reports output.
     Task { data: Value, handle: Option<Handle> },
 
-    /// Like Task but expected to produce NodeOutput::Many for fan-out.
+    /// Like Task but expected to produce `NodeOutput::Many` for fan-out.
     Scatter { data: Value, handle: Option<Handle> },
 
     /// Engine-executed: collects inbound tokens per strategy, produces Many output.
@@ -149,7 +146,7 @@ impl EdgeCondition {
 
 // ─── Node / Graph Status ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Pending,
@@ -181,12 +178,12 @@ impl std::str::FromStr for NodeStatus {
             "running" => Ok(NodeStatus::Running),
             "complete" => Ok(NodeStatus::Complete),
             "failed" => Ok(NodeStatus::Failed),
-            other => Err(format!("Unknown node status: {}", other)),
+            other => Err(format!("Unknown node status: {other}")),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphStatus {
     Pending,
@@ -218,7 +215,7 @@ impl std::str::FromStr for GraphStatus {
             "complete" => Ok(GraphStatus::Complete),
             "failed" => Ok(GraphStatus::Failed),
             "cancelled" => Ok(GraphStatus::Cancelled),
-            other => Err(format!("Unknown graph status: {}", other)),
+            other => Err(format!("Unknown graph status: {other}")),
         }
     }
 }
@@ -251,7 +248,7 @@ pub struct LatticeGraph {
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 
-/// Events emitted by the execute() stream
+/// Events emitted by the `execute()` stream
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LatticeEvent {
