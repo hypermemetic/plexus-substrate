@@ -4,7 +4,7 @@ title: "PROT epic — unified schema protocol: every addressable node returns Pl
 status: Epic
 type: epic
 blocked_by: []
-unlocks: [PROT-2, PROT-3, PROT-4, PROT-5, PROT-6, PROT-7, PROT-8, PROT-9, PROT-10]
+unlocks: [PROT-S01, PROT-S02, PROT-S03, PROT-S04, PROT-2, PROT-3, PROT-4, PROT-5, PROT-6, PROT-7, PROT-8, PROT-9, PROT-10]
 target_repo: multiple
 ---
 
@@ -81,6 +81,7 @@ Consumers always deserialize the same type. No content_type branch. Synapse tree
 
 | Phase | Tickets | Notes |
 |---|---|---|
+| 0. Spikes | PROT-S01, PROT-S02, PROT-S03, PROT-S04 | Binary-pass. Ratify `SchemaResult` shape across 6 crates; audit `.hash` / `_info` for same bug; verify fix works with dynamic child gates; grep workspace for direct `SchemaResult::Method` usage. |
 | 1. Core type change | PROT-2 | Add helper + remove `SchemaResult::Method`. Bumps plexus-core 0.5.0 → 0.6.0. |
 | 2. Macro + transport + protocol | PROT-3, PROT-4, PROT-5 | Parallel. Each consumes plexus-core 0.6.0. |
 | 3. Synapse adopt | PROT-6 | Depends on plexus-protocol 0.6.0.0. Major bump 3.x → 4.0. |

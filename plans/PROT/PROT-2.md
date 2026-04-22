@@ -3,7 +3,7 @@ id: PROT-2
 title: "plexus-core 0.6.0: add PluginSchema::leaf_with_single_method, remove SchemaResult::Method"
 status: Pending
 type: implementation
-blocked_by: []
+blocked_by: [PROT-S01, PROT-S04]
 unlocks: [PROT-3, PROT-4, PROT-5]
 severity: Critical
 target_repo: plexus-core

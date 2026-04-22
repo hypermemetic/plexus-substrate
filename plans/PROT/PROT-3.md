@@ -3,7 +3,7 @@ id: PROT-3
 title: "plexus-macros 0.6.0: rewrite schema dispatch to child-first; drop deprecated hub/hub_method/hub_methods"
 status: Pending
 type: implementation
-blocked_by: [PROT-2]
+blocked_by: [PROT-2, PROT-S02, PROT-S03]
 unlocks: [PROT-7, PROT-8]
 severity: Critical
 target_repo: plexus-macros
