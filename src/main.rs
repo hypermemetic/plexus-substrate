@@ -79,9 +79,24 @@ async fn main() -> anyhow::Result<()> {
     tracing::trace!("  └─ trace :: full observability unlocked");
 
     if args.api_key.is_some() {
-        tracing::info!("Authentication: bearer token configured (--api-key / PLEXUS_API_KEY)");
+        // AUTHZ-BEARER-1: when this substrate is rebuilt against the
+        // plexus-transport version that ships AUTHZ-BEARER-1, the api_key
+        // is enforced on a dedicated header (default `X-Plexus-API-Key`),
+        // not on `Authorization: Bearer`. `Authorization: Bearer` becomes
+        // reserved for SessionValidator user-identity tokens. The string
+        // literal is hard-coded here because this binary may be linked
+        // against the pre-AUTHZ-BEARER-1 published transport during the
+        // upgrade window; once both are in sync, switch to
+        // `plexus_transport::DEFAULT_API_KEY_HEADER`.
+        tracing::info!(
+            "Authentication: static admission key configured (header: X-Plexus-API-Key); \
+             Authorization: Bearer is reserved for SessionValidator (AUTHZ-BEARER-1)",
+        );
     } else {
-        tracing::warn!("Authentication: DISABLED — set --api-key or PLEXUS_API_KEY to require bearer tokens");
+        tracing::warn!(
+            "Authentication: DISABLED — set --api-key or PLEXUS_API_KEY to require an \
+             admission key (sent on the X-Plexus-API-Key header)"
+        );
     }
 
     // Build Plexus RPC hub (returns Arc<DynamicHub>)
