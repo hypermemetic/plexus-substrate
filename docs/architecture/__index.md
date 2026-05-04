@@ -3,6 +3,7 @@
 ## Start Here
 
 - **[intro-lattice-orcha-tdd.md](intro-lattice-orcha-tdd.md)** — Full stack introduction: Plexus RPC → Lattice → Orcha → TDD node. Read this first.
+- **[Substrate Wire Protocol & Security Reference](./16668990377026586623_substrate-wire-protocol-and-security-reference.md)** — 2026-05-02. Reference for client/agent developers: actual JSON shapes on the wire, NDJSON framing of `synapse --json`, what auth substrate enforces (and what it doesn't), bidir request shapes, security posture for public hosting.
 - **[Substrate Technical Debt and Architecture Audit](./16670380887168786687_substrate-technical-debt-audit.md)** — 2026-04-16. Current state of the code: patterns that work, coupling debts, stringly-typed concepts, load-bearing panics, missing systems. Starting point for ticketing.
 
 ## Lattice
