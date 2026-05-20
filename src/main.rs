@@ -107,6 +107,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Log activation info
     tracing::info!("Plexus hash: {}", plexus_hash);
+    tracing::info!(
+        "plexus-rpc umbrella v{} — core={} macros={} auth-core={} transport={:?} features={:?}",
+        plexus_rpc::CAPABILITIES.plexus_rpc,
+        plexus_rpc::CAPABILITIES.plexus_core,
+        plexus_rpc::CAPABILITIES.plexus_macros,
+        plexus_rpc::CAPABILITIES.plexus_auth_core,
+        plexus_rpc::CAPABILITIES.plexus_transport,
+        plexus_rpc::CAPABILITIES.features,
+    );
     tracing::info!("");
     tracing::info!("Activations ({}):", activations.len());
     for activation in &activations {
